@@ -39,3 +39,14 @@
 
 # debug information files
 *.dwo
+
+# multi-target builds
+**/build/
+**/out/
+**/*.o
+**/*.a
+**/*.so
+
+# runtime
+run/
+*.log
