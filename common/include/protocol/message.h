@@ -6,6 +6,7 @@ extern "C" {
 #endif
 
 // ROLE: direction/semantics
+//메세지 방향, 성격 구분 각 요청,응답,비동기 이벤트, 파싱 실패 대비
 typedef enum {
   ROLE_REQ = 0,
   ROLE_RESP,
@@ -14,6 +15,7 @@ typedef enum {
 } msg_role_t;
 
 // TYPE: command/event kind (Phase1 minimal)
+//연결 확인, 상태전이(START/STOP), 상태 조회, 오류 알림, 파싱 실패 대비
 typedef enum {
   TYPE_PING = 0,
   TYPE_START,
