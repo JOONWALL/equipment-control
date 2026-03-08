@@ -64,10 +64,12 @@ int main(int argc, char** argv){
       int got = session_pop_line(&sess, line, sizeof(line));
       if(got == 0) break;
       if(got < 0){ fprintf(stderr, "[equipmentd] line too long\n"); goto done; }
+      printf("[RX line] %s\n", line);
 
       message_t in, out;
       int pr = line_parse(line, &in);
       if(pr != 0){
+        printf("[PARSE ERROR]\n");
         memset(&out, 0, sizeof(out));
         out.role = ROLE_RESP;
         out.type = TYPE_ERROR;
@@ -75,12 +77,16 @@ int main(int argc, char** argv){
         out.code = 400; out.has_code = 1;
         strncpy(out.msg, "PARSE_ERROR", sizeof(out.msg)-1); out.has_msg = 1;
       } else {
+        printf("[PARSED] role=%d type=%d\n", in.role, in.type);
         int rr = router_handle(&in, &out);
         if(rr <= 0) continue; // no response
+        /*router가 응답 생성 책임만 가지고
+        I/O는 main이 담당하는 구조*/
       }
 
       int wn = line_format(&out, wbuf, sizeof(wbuf));
       if(wn < 0){ fprintf(stderr, "[equipmentd] format fail\n"); goto done; }
+      printf("[TX line] %s", wbuf);
       (void)write(cfd, wbuf, (size_t)wn);
     }
   }
