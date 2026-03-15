@@ -21,6 +21,8 @@ typedef enum {
   TYPE_START,
   TYPE_STOP,
   TYPE_STATUS,
+  TYPE_RESET,
+  TYPE_FAULT,
   TYPE_ERROR,
   TYPE_UNKNOWN
 } msg_type_t;
