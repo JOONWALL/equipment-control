@@ -24,6 +24,8 @@ static msg_type_t type_from(const char* s) {
   if (strcmp(s, "START") == 0) return TYPE_START;
   if (strcmp(s, "STOP") == 0) return TYPE_STOP;
   if (strcmp(s, "STATUS") == 0) return TYPE_STATUS;
+  if (strcmp(s, "RESET") == 0) return TYPE_RESET;
+  if (strcmp(s, "FAULT") == 0) return TYPE_FAULT;
   if (strcmp(s, "ERROR") == 0) return TYPE_ERROR;
   return TYPE_UNKNOWN;
 }
@@ -43,6 +45,8 @@ static const char* type_to(msg_type_t t) {
     case TYPE_START: return "START";
     case TYPE_STOP: return "STOP";
     case TYPE_STATUS: return "STATUS";
+    case TYPE_RESET: return "RESET";
+    case TYPE_FAULT: return "FAULT";
     case TYPE_ERROR: return "ERROR";
     default: return "UNKNOWN";
   }

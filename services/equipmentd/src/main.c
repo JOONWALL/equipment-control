@@ -14,6 +14,7 @@
 #include "protocol/session.h"
 #include "protocol/line_codec.h"
 #include "internal/router.h"
+#include "internal/device_manager.h"
 
 #include <sys/epoll.h>
 #include <fcntl.h>
@@ -53,6 +54,9 @@ static long long now_ms(void){
 
 int main(int argc, char** argv){
   int port = (argc >= 2) ? atoi(argv[1]) : 12345;
+
+  device_manager_t dev_mgr;
+  device_manager_init(&dev_mgr);
 
   char line[512];
   char wbuf[512];
@@ -219,7 +223,7 @@ int main(int argc, char** argv){
               out.has_msg = 1;
             } else {
               printf("[PARSED] role=%d type=%d\n", in.role, in.type);
-              int rr = router_handle(&in, &out);
+              int rr = router_handle(&dev_mgr, &in, &out);
               if(rr <= 0) continue;
             }
 
