@@ -24,6 +24,10 @@ typedef enum {
   TYPE_RESET,
   TYPE_FAULT,
   TYPE_ERROR,
+
+  TYPE_TELEMETRY,
+  TYPE_ALARM,
+
   TYPE_UNKNOWN
 } msg_type_t;
 
@@ -41,6 +45,10 @@ typedef struct {
 
   char state[32]; int has_state; // STATUS state token (e.g., IDLE/RUNNING)
   char msg[128];  int has_msg;   // human readable (Phase1: no spaces, '_' recommended)
+
+  double temp; int has_temp;
+  double pressure; int has_pressure;
+  double flow; int has_flow;
 } message_t;
 
 #ifdef __cplusplus
