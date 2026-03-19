@@ -1,77 +1,110 @@
-# equipment-control
+# Equipment Control
 
-Linux(C)-based distributed equipment control architecture featuring
-state-driven design and transport layer abstraction (Link / Session / Protocol).
+## What
+Linux/C 기반의 반도체 장비 제어 SW 구조를 모사하는 프로젝트입니다.  
+상위 제어 서버(`equipmentd`), 중간 제어 노드(`PMC`), 장비 시뮬레이터(`sim`)를 분리해  
+REQ/RESP/EVT 기반 통신과 상태 제어 구조를 구현하는 것을 목표로 합니다.
 
-Linux(C) 기반 중앙 제어 서버(equipmentd)가 TCP/Serial 장비 노드를 관리하는
-분산 장비 제어 아키텍처 프로젝트
+---
 
-## 🎯 Project Goal
+## Why
+- 장비 제어 SW에 가까운 구조를 직접 설계/구현해보기 위해
+- Linux system programming, TCP/IP, event-driven server(epoll) 역량을 프로젝트로 보여주기 위해
+- 실제 장비 없이도 simulator 기반으로 상태 변화/telemetry를 검증하기 위해
 
-- 장비 제어 SW 구조를 고려한 분산 아키텍처 설계 및 구현
-- 통신 드라이버 추상화(Link / Session / Protocol 분리)
-- 상태 기반(State Machine) 제어 및 Timeout/Retry 처리
-- 다중 장비 관리(DeviceManager) 구조 구현
-- Test / Trouble Shooting 가능한 로그 및 재현 구조 설계
+---
 
-## 🧠 Architecture Overview
+## Current Architecture
+text
+equipmentd <-> PMC <-> sim
 
-Control Server (equipmentd)
-  ├── DeviceManager
-  ├── StateMachine
-  ├── Scheduler
-  ├── CommandRouter
-  └── Transport Layer
-        ├── Link (fd I/O)
-        ├── Session (reconnect, buffer)
-        └── Protocol (Framer + Codec)
+---
 
-<img width="1039" height="584" alt="구조도" src="https://github.com/user-attachments/assets/512ea7c8-2afd-45c6-b77d-5176d59cbb72" />
+### equipmentd
+상위 제어 서버
+protocol parsing, routing, device state 관리 담당
 
+### PMC
+equipmentd 와 sim 사이의 중간 제어/중계 노드
+메시지 전달 및 연결 관리 담당
 
-## 🏗️ Design Principles
+### sim
+가짜 장비 노드
+FSM, process model, telemetry 생성 담당
 
-1. Core와 Transport 완전 분리
-   - Core는 Message만 처리 (bytes 접근 금지)
+---
 
-2. Link / Session / Protocol 계층 분리
-   - 통신 리팩토링 시 Core 영향 최소화
-
-3. DeviceDriver 계층 도입
-   - 장비별 프로토콜/에러 매핑 격리
-
-4. Event-driven 상태 기반 제어
-   - Command 나열이 아닌 StateMachine 기반 전이
-     
-5. Core boundary enforcement
-   - DeviceManager / StateMachine never access raw bytes directly.
-
-## 🚀 Roadmap
+## Progress
 
 ### Phase 1
-- Single device TCP control
-- Blocking I/O
-- Basic logging
 
-### Phase 2
-- Non-blocking I/O (epoll)
-- Timeout / Retry
-- State Machine 도입
-- Event-driven architecture stabilization
+- line-based text protocol 초안 작성
 
-### Phase 3
-- Multi-device management
-- DeviceDriver abstraction
+- session / line codec 기반 통신 골격 구현
 
-### Phase 4
-- SerialChannel 분리
-- Reconnect / Heartbeat
+Phase 2
 
-### Phase 5
-- Test / Fault Injection
-- Log replay
+- equipmentd epoll 기반 event loop 구현
 
-### Phase 6+
-- systemd service integration
-- mmap-based telemetry buffer
-- (Optional) anomaly detection module
+- TCP connection / session / framing / parsing 동작 검증
+
+- fake simulator 와 equipmentd 간 기본 통신 확인
+
+- Timeout 구현 및 multidevice 대응
+
+Phase 3
+
+- device_manager 도입
+
+- START / STOP / RESET / FAULT / STATUS 처리 추가
+
+- simulator 측 FSM / process model / telemetry 구조 분리
+
+Current
+
+- equipmentd <-> sim 직접 통신 검증 완료
+
+- PMC 도입 시작
+
+- 다음 목표: equipmentd <-> PMC <-> sim 중계 경로 완성
+
+---
+
+## Directory Overview
+common/
+  include/protocol/   # message, session, codec
+  src/protocol/
+
+services/
+  equipmentd/         # upper control server
+
+nodes/
+  deviced/sim/        # device simulator
+  pmc/                # process module controller (in progress)
+
+docs/
+  architecture.md
+  protocol/spec.md
+
+---
+
+## Next Steps
+
+- PMC 최소 골격 구현
+
+- equipmentd <-> PMC <-> sim 메시지 중계 확인
+
+- equipmentd 구조 정리(router / device_manager / connection)
+
+- protocol detail 정리 및 문서 업데이트
+
+- 이후 heartbeat / reconnect 검토
+
+---
+
+## Notes
+
+현재 README는 상세 구현 문서가 아니라 진행 상황 리마인드용으로 유지
+
+세부 설계는 docs/architecture.md, docs/protocol/spec.md에서 관리
+---
