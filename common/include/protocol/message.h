@@ -18,6 +18,7 @@ typedef enum {
 //연결 확인, 상태전이(START/STOP), 상태 조회, 오류 알림, 파싱 실패 대비
 typedef enum {
   TYPE_PING = 0,
+  TYPE_REGISTER,
   TYPE_START,
   TYPE_STOP,
   TYPE_STATUS,

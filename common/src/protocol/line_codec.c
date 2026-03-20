@@ -21,6 +21,7 @@ static msg_role_t role_from(const char* s) {
 
 static msg_type_t type_from(const char* s) {
   if (strcmp(s, "PING") == 0) return TYPE_PING;
+  if (strcmp(s, "REGISTER") == 0) return TYPE_REGISTER;
   if (strcmp(s, "START") == 0) return TYPE_START;
   if (strcmp(s, "STOP") == 0) return TYPE_STOP;
   if (strcmp(s, "STATUS") == 0) return TYPE_STATUS;
@@ -44,6 +45,7 @@ static const char* role_to(msg_role_t r) {
 static const char* type_to(msg_type_t t) {
   switch (t) {
     case TYPE_PING: return "PING";
+    case TYPE_REGISTER: return "REGISTER";
     case TYPE_START: return "START";
     case TYPE_STOP: return "STOP";
     case TYPE_STATUS: return "STATUS";

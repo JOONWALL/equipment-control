@@ -50,3 +50,6 @@
 # runtime
 run/
 *.log
+equipmentd_bin
+pmc_bin
+device_sim_fake
