@@ -11,7 +11,7 @@ SRC_COMMON = \
 SRC_EQUIP = \
   services/equipmentd/src/main.c \
   services/equipmentd/src/router.c \
-  services/equipmentd/src/connection_table.c\
+  services/equipmentd/src/connection_table.c \
   services/equipmentd/src/device_manager.c
 
 SRC_PMC = \
@@ -37,4 +37,4 @@ sim:
 	$(CC) $(CFLAGS) -o device_sim_fake $(SRC_COMMON) $(SRC_SIM)
 
 clean:
-	rm -f equipmentd_bin device_sim_fake
+	rm -f equipmentd_bin pmc_bin device_sim_fake
