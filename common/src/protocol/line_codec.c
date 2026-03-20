@@ -21,11 +21,14 @@ static msg_role_t role_from(const char* s) {
 
 static msg_type_t type_from(const char* s) {
   if (strcmp(s, "PING") == 0) return TYPE_PING;
+  if (strcmp(s, "REGISTER") == 0) return TYPE_REGISTER;
   if (strcmp(s, "START") == 0) return TYPE_START;
   if (strcmp(s, "STOP") == 0) return TYPE_STOP;
   if (strcmp(s, "STATUS") == 0) return TYPE_STATUS;
   if (strcmp(s, "RESET") == 0) return TYPE_RESET;
   if (strcmp(s, "FAULT") == 0) return TYPE_FAULT;
+  if (strcmp(s, "TELEMETRY") == 0) return TYPE_TELEMETRY;
+  if (strcmp(s, "ALARM") == 0) return TYPE_ALARM;
   if (strcmp(s, "ERROR") == 0) return TYPE_ERROR;
   return TYPE_UNKNOWN;
 }
@@ -42,11 +45,14 @@ static const char* role_to(msg_role_t r) {
 static const char* type_to(msg_type_t t) {
   switch (t) {
     case TYPE_PING: return "PING";
+    case TYPE_REGISTER: return "REGISTER";
     case TYPE_START: return "START";
     case TYPE_STOP: return "STOP";
     case TYPE_STATUS: return "STATUS";
     case TYPE_RESET: return "RESET";
     case TYPE_FAULT: return "FAULT";
+    case TYPE_TELEMETRY: return "TELEMETRY";
+    case TYPE_ALARM: return "ALARM";
     case TYPE_ERROR: return "ERROR";
     default: return "UNKNOWN";
   }
@@ -112,6 +118,15 @@ int line_parse(const char* line, message_t* out) {
       strncpy(out->msg, val, sizeof(out->msg) - 1);
       out->msg[sizeof(out->msg) - 1] = '\0';
       out->has_msg = 1;
+    } else if (strcmp(key, "temp") == 0) {
+      out->temp = strtod(val, NULL);
+      out->has_temp = 1;
+    } else if (strcmp(key, "pressure") == 0) {
+      out->pressure = strtod(val, NULL);
+      out->has_pressure = 1;
+    } else if (strcmp(key, "flow") == 0) {
+      out->flow = strtod(val, NULL);
+      out->has_flow = 1;
     } else {
       // Unknown keys must be ignored (forward compatibility)
     }
@@ -154,6 +169,21 @@ int line_format(const message_t* m, char* out, size_t cap) {
   }
   if (m->has_msg) {
     int r = snprintf(out + w, cap - (size_t)w, " msg=%s", m->msg);
+    if (r < 0 || (size_t)(w + r) >= cap) return -1;
+    w += r;
+  }
+  if (m->has_temp) {
+    int r = snprintf(out + w, cap - (size_t)w, " temp=%.2f", m->temp);
+    if (r < 0 || (size_t)(w + r) >= cap) return -1;
+    w += r;
+  }
+  if (m->has_pressure) {
+    int r = snprintf(out + w, cap - (size_t)w, " pressure=%.2f", m->pressure);
+    if (r < 0 || (size_t)(w + r) >= cap) return -1;
+    w += r;
+  }
+  if (m->has_flow) {
+    int r = snprintf(out + w, cap - (size_t)w, " flow=%.2f", m->flow);
     if (r < 0 || (size_t)(w + r) >= cap) return -1;
     w += r;
   }

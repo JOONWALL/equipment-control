@@ -6,7 +6,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <arpa/inet.h>
-#include <time.h>//usleep POSIX 2008에서 폐기라 코드 대체
+#include <time.h> // usleep POSIX 2008에서 폐기라 코드 대체
 
 #define BUF_SIZE 1024
 
@@ -87,12 +87,11 @@ int sim_handle_message(sim_ctx_t* ctx, const message_t* in, message_t* out){
 
 int main(int argc, char* argv[]){
   int dev_id = 1;
-  const char* host = "192.168.219.120";
-  int port = 12345;
+  const char* host = "127.0.0.1";
+  int port = 12346;
 
-  // 간단 파싱
-  for(int i=1;i<argc;i++){
-    if(strcmp(argv[i], "--dev")==0 && i+1<argc){
+  for(int i = 1; i < argc; i++){
+    if(strcmp(argv[i], "--dev") == 0 && i + 1 < argc){
       dev_id = atoi(argv[++i]);
     }
   }
@@ -113,12 +112,29 @@ int main(int argc, char* argv[]){
 
   printf("connected to %s:%d (dev=%d)\n", host, port, dev_id);
 
+  // PMC에 SIM 등록
+  {
+    message_t reg;
+    char regbuf[512];
+    int reglen;
+
+    memset(&reg, 0, sizeof(reg));
+    reg.role = ROLE_EVT;
+    reg.type = TYPE_REGISTER;
+    reg.dev = ctx.dev_id;
+    reg.has_dev = 1;
+
+    reglen = line_format(&reg, regbuf, sizeof(regbuf));
+    if(reglen > 0){
+      send(ctx.sock, regbuf, reglen, 0);
+    }
+  }
+
   char buf[BUF_SIZE];
   char line[BUF_SIZE];
   struct timespec ts = {1, 0};
 
   while(1){
-    // recv
     int n = recv(ctx.sock, buf, sizeof(buf), MSG_DONTWAIT);
     if(n > 0){
       session_feed(&ctx.session, buf, n);
@@ -130,32 +146,28 @@ int main(int argc, char* argv[]){
 
         if(sim_handle_message(&ctx, &in, &out) == 1){
           char outbuf[BUF_SIZE];
-          int len = line_format(&out, outbuf, sizeof(outbuf));
-          if(len > 0){
-            send(ctx.sock, outbuf, len, 0);
+          int outlen = line_format(&out, outbuf, sizeof(outbuf));
+          if(outlen > 0){
+            send(ctx.sock, outbuf, outlen, 0);
           }
         }
       }
     }
 
-    // FSM tick
     fsm_tick(&ctx.fsm);
 
-    // process model 업데이트
     process_model_apply_state(&ctx.model, ctx.fsm.state);
     process_model_update(&ctx.model);
 
-    // telemetry 보내기
     message_t evt;
     telemetry_build_telemetry_evt(&evt, ctx.dev_id, &ctx.model);
 
     char outbuf[BUF_SIZE];
-    int len = line_format(&evt, outbuf, sizeof(outbuf));
-    if(len > 0){
-      send(ctx.sock, outbuf, len, 0);
+    int outlen = line_format(&evt, outbuf, sizeof(outbuf));
+    if(outlen > 0){
+      send(ctx.sock, outbuf, outlen, 0);
     }
 
-    //1초
     nanosleep(&ts, NULL);
   }
 
