@@ -25,7 +25,13 @@ SRC_SIM = \
   nodes/deviced/sim/src/process_model.c \
   nodes/deviced/sim/src/telemetry.c
 
-all: equipmentd pmc sim
+SRC_TMC = \
+  nodes/tmc/src/main.c
+
+SRC_HOSTSIM = \
+  services/hostsim/src/main.c
+
+all: equipmentd pmc sim tmc hostsim
 
 equipmentd:
 	$(CC) $(CFLAGS) -o equipmentd_bin $(SRC_COMMON) $(SRC_EQUIP)
@@ -38,3 +44,9 @@ sim:
 
 clean:
 	rm -f equipmentd_bin pmc_bin device_sim_fake
+
+tmc:
+	$(CC) $(CFLAGS) -o tmc_bin $(SRC_COMMON) $(SRC_TMC)
+
+hostsim:
+	$(CC) $(CFLAGS) -o hostsim_bin $(SRC_COMMON) $(SRC_HOSTSIM)
