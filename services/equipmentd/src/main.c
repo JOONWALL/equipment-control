@@ -52,6 +52,203 @@ static long long now_ms(void){
   return (long long)ts.tv_sec * 1000LL + ts.tv_nsec / 1000000LL;
 }
 
+static void close_connection(int epfd, connection_t* conn){
+  if(!conn) return;
+
+  conn->state = CONN_CLOSED;
+  epoll_ctl(epfd, EPOLL_CTL_DEL, conn->fd, NULL);
+  close(conn->fd);
+  unregister_connection(conn);
+  free(conn);
+}
+
+static void make_parse_error(message_t* out){
+  memset(out, 0, sizeof(*out));
+  out->role = ROLE_RESP;
+  out->type = TYPE_ERROR;
+  out->ok = 0;
+  out->has_ok = 1;
+  out->code = 400;
+  out->has_code = 1;
+  strncpy(out->msg, "PARSE_ERROR", sizeof(out->msg) - 1);
+  out->has_msg = 1;
+}
+
+static int handle_one_line(connection_t* conn, device_manager_t* mgr, const char* line, char* wbuf, size_t wbuf_sz){
+  message_t in, out;
+  int pr = line_parse(line, &in);
+
+  if(pr != 0){
+    make_parse_error(&out);
+  } else {
+    int rr = router_handle(mgr, &in, &out);
+    if(rr <= 0) return 0;
+  }
+
+  int wn = line_format(&out, wbuf, wbuf_sz);
+  if(wn < 0) return -1;
+
+  if(write(conn->fd, wbuf, (size_t)wn) < 0){
+    return -1;
+  }
+
+  return 1;
+}
+
+static void handle_accept_event(int epfd, int sfd){
+  while(1){
+    int cfd = accept(sfd, NULL, NULL);
+    if(cfd < 0){
+      if(errno == EAGAIN || errno == EWOULDBLOCK){
+        break;
+      }
+      perror("accept");
+      break;
+    }
+
+    if(set_nonblocking(cfd) < 0){
+      perror("set_nonblocking");
+      close(cfd);
+      continue;
+    }
+
+    connection_t* conn = malloc(sizeof(connection_t));
+    if(!conn){
+      perror("malloc");
+      close(cfd);
+      continue;
+    }
+
+    memset(conn, 0, sizeof(*conn));
+    conn->fd = cfd;
+    session_init(&conn->session);
+    conn->state = CONN_OPEN;
+    conn->last_active_ms = now_ms();
+
+    register_connection(conn);
+
+    struct epoll_event cev;
+    memset(&cev, 0, sizeof(cev));
+    cev.events = EPOLLIN;
+    cev.data.ptr = conn;
+
+    if(epoll_ctl(epfd, EPOLL_CTL_ADD, cfd, &cev) < 0){
+      perror("epoll_ctl client add");
+      unregister_connection(conn);
+      close(cfd);
+      free(conn);
+      continue;
+    }
+
+    printf("[equipmentd] client connected fd=%d\n", cfd);
+
+    // 현재 PMC 테스트용 REGISTER 유지
+    message_t reg;
+    memset(&reg, 0, sizeof(reg));
+
+    reg.role = ROLE_REQ;
+    reg.type = TYPE_REGISTER;
+    reg.seq = 1;
+    reg.has_seq = 1;
+
+    char buf[512];
+    int len = line_format(&reg, buf, sizeof(buf));
+    if(len > 0){
+      (void)write(cfd, buf, (size_t)len);
+    }
+  }
+}
+
+static void handle_client_event(
+  int epfd,
+  connection_t* conn,
+  device_manager_t* dev_mgr,
+  char* line,
+  size_t line_sz,
+  char* wbuf,
+  size_t wbuf_sz
+){
+  int fd = conn->fd;
+
+  printf("[epoll] client event fd=%d\n", fd);
+
+  while(1){
+    char rbuf[1024];
+    ssize_t n = read(fd, rbuf, sizeof(rbuf));
+
+    if(n == 0){
+      printf("[equipmentd] client closed fd=%d\n", fd);
+      close_connection(epfd, conn);
+      break;
+    }
+
+    if(n < 0){
+      if(errno == EAGAIN || errno == EWOULDBLOCK){
+        break;
+      }
+      perror("read");
+      close_connection(epfd, conn);
+      break;
+    }
+
+    printf("[read] fd=%d n=%zd\n", fd, n);
+    conn->last_active_ms = now_ms();
+
+    if(session_feed(&conn->session, rbuf, (size_t)n) != 0){
+      fprintf(stderr, "[equipmentd] session overflow\n");
+      close_connection(epfd, conn);
+      break;
+    }
+
+    while(1){
+      int got = session_pop_line(&conn->session, line, line_sz);
+      if(got == 0) break;
+
+      if(got < 0){
+        fprintf(stderr, "[equipmentd] line too long\n");
+        break;
+      }
+
+      printf("[RX line] %s\n", line);
+
+      //테스트용 라인 시작
+      static int sent = 0;
+      if(!sent){
+          char wbuf[256];
+          message_t req;
+          memset(&req, 0, sizeof(req));
+
+          req.role = ROLE_REQ;
+          req.type = TYPE_START;
+          req.has_dev = 1;
+          req.dev = 1;
+          req.has_seq = 1;
+          req.seq = 1;
+
+          int wn = line_format(&req, wbuf, sizeof(wbuf));
+          if(wn > 0){
+              write(fd, wbuf, wn);
+              printf("[TX TEST] %s", wbuf);
+              sent = 1;
+          }
+      }
+      //끝
+
+      int hr = handle_one_line(conn, dev_mgr, line, wbuf, wbuf_sz);
+      if(hr < 0){
+        perror("handle_one_line");
+        close_connection(epfd, conn);
+        break;
+      }
+    }
+
+    // handle_one_line에서 close된 경우 추가 작업 방지
+    if(conn->state == CONN_CLOSED){
+      break;
+    }
+  }
+}
+
 int main(int argc, char** argv){
   int port = (argc >= 2) ? atoi(argv[1]) : 12345;
 
@@ -62,7 +259,10 @@ int main(int argc, char** argv){
   char wbuf[512];
 
   int sfd = make_server(port);
-  if(sfd < 0){ perror("server"); return 1; }
+  if(sfd < 0){
+    perror("server");
+    return 1;
+  }
 
   if(set_nonblocking(sfd) < 0){
     perror("set_nonblocking sfd");
@@ -73,187 +273,46 @@ int main(int argc, char** argv){
   printf("[equipmentd] listening on %d\n", port);
 
   int epfd = epoll_create1(0);
-  if(epfd < 0){ perror("epoll_create"); return 1; }
+  if(epfd < 0){
+    perror("epoll_create");
+    close(sfd);
+    return 1;
+  }
 
   struct epoll_event ev;
+  memset(&ev, 0, sizeof(ev));
   ev.events = EPOLLIN;
   ev.data.fd = sfd;
 
   if(epoll_ctl(epfd, EPOLL_CTL_ADD, sfd, &ev) < 0){
     perror("epoll_ctl");
+    close(epfd);
+    close(sfd);
     return 1;
   }
 
   struct epoll_event events[16];
 
   while(1){
-    //1초마다 깨우는데 이건 timerfd로 보완필요
     int nfds = epoll_wait(epfd, events, 16, 1000);
-          if(nfds < 0){
-            if(errno == EINTR) continue;
-            perror("epoll_wait");
-            break;
-          }
+    if(nfds < 0){
+      if(errno == EINTR) continue;
+      perror("epoll_wait");
+      break;
+    }
 
-          for(int i = 0; i < nfds; i++){
-
-            if(events[i].data.fd == sfd){
+    for(int i = 0; i < nfds; i++){
+      if(events[i].data.fd == sfd){
         printf("[epoll] accept event\n");
-
-        while(1){
-          int cfd = accept(sfd, NULL, NULL);
-          if(cfd < 0){
-            if(errno == EAGAIN || errno == EWOULDBLOCK){
-              break;
-            }
-            perror("accept");
-            break;
-          }
-
-          if(set_nonblocking(cfd) < 0){
-            perror("set_nonblocking");
-            close(cfd);
-            continue;
-          }
-
-          connection_t* conn = malloc(sizeof(connection_t));
-          if(!conn){
-            perror("malloc");
-            close(cfd);
-            continue;
-          }
-
-          conn->fd = cfd;
-          session_init(&conn->session);
-          //connection table 등록
-          register_connection(conn);
-          //connection 생성 시 timestamp/state 초기화
-          conn->state = CONN_OPEN;
-          conn->last_active_ms = now_ms();
-
-          struct epoll_event cev;
-          cev.events = EPOLLIN;
-          cev.data.ptr = conn;
-
-          if(epoll_ctl(epfd, EPOLL_CTL_ADD, cfd, &cev) < 0){
-            perror("epoll_ctl client add");
-            close(cfd);
-            free(conn);
-            continue;
-          }
-
-          printf("[equipmentd] client connected fd=%d\n", cfd);
-        }
-      }
-
-      else{
-        connection_t* conn = events[i].data.ptr;
-        int fd = conn->fd;
-
-        printf("[epoll] client event fd=%d\n", fd);
-
-        while(1){
-          char rbuf[1024];
-          ssize_t n = read(fd, rbuf, sizeof(rbuf));
-
-          if(n == 0){
-            printf("[equipmentd] client closed fd=%d\n", fd);
-            
-            //close 시 state 갱신
-            conn->state = CONN_CLOSED;
-            epoll_ctl(epfd, EPOLL_CTL_DEL, fd, NULL);
-            close(fd);
-            //free 전에 registry에서 제거
-            unregister_connection(conn);
-
-            free(conn);
-            break;
-          }
-
-          if(n < 0){
-            if(errno == EAGAIN || errno == EWOULDBLOCK){
-              break;
-            }
-            perror("read");
-            //close 시 state 갱신
-            conn->state = CONN_CLOSED;
-            epoll_ctl(epfd, EPOLL_CTL_DEL, fd, NULL);
-            close(fd);
-            //free 전에 registry에서 제거
-            unregister_connection(conn);
-            free(conn);
-            break;
-          }
-          
-          printf("[read] fd=%d n=%zd\n", fd, n);
-          //read 성공 시 timestamp 갱신 (timeout reset)
-          conn->last_active_ms = now_ms();
-
-          if(session_feed(&conn->session, rbuf, (size_t)n) != 0){
-            fprintf(stderr, "[equipmentd] session overflow\n");
-            epoll_ctl(epfd, EPOLL_CTL_DEL, fd, NULL);
-            close(fd);
-            //free 전에 registry에서 제거
-            unregister_connection(conn);
-            free(conn);
-            break;
-          }
-
-          while(1){
-            int got = session_pop_line(&conn->session, line, sizeof(line));
-            if(got == 0) break;
-            if(got < 0){
-              fprintf(stderr, "[equipmentd] line too long\n");
-              break;
-            }
-
-            printf("[RX line] %s\n", line);
-
-            message_t in, out;
-            int pr = line_parse(line, &in);
-
-            if(pr != 0){
-              printf("[PARSE ERROR]\n");
-              memset(&out, 0, sizeof(out));
-              out.role = ROLE_RESP;
-              out.type = TYPE_ERROR;
-              out.ok = 0; out.has_ok = 1;
-              out.code = 400; out.has_code = 1;
-              strncpy(out.msg, "PARSE_ERROR", sizeof(out.msg) - 1);
-              out.has_msg = 1;
-            } else {
-              printf("[PARSED] role=%d type=%d\n", in.role, in.type);
-              int rr = router_handle(&dev_mgr, &in, &out);
-              if(rr <= 0) continue;
-            }
-
-            int wn = line_format(&out, wbuf, sizeof(wbuf));
-            if(wn < 0){
-              fprintf(stderr, "[equipmentd] format fail\n");
-              break;
-            }
-
-            printf("[TX line] %s", wbuf);
-            //write실패 체크 - 아직 partial write 처리랑 write queue 아님
-            ssize_t wr = write(fd, wbuf, (size_t)wn);
-            if(wr < 0){
-              perror("write");
-              conn->state = CONN_CLOSED;
-              epoll_ctl(epfd, EPOLL_CTL_DEL, fd, NULL);
-              close(fd);
-              unregister_connection(conn);
-              free(conn);
-              break;
-            }
-          }
-        }
+        handle_accept_event(epfd, sfd);
+      } else {
+        connection_t* conn = (connection_t*)events[i].data.ptr;
+        handle_client_event(epfd, conn, &dev_mgr, line, sizeof(line), wbuf, sizeof(wbuf));
       }
     }
-    //epoll loop가 끝난 뒤, connection table돌면서 타임아웃 검사
+
     scan_connection_timeout(epfd, now_ms());
   }
-
-
 
   close(sfd);
   close(epfd);
