@@ -129,13 +129,15 @@ static int handle_req(device_manager_t* mgr, const message_t* in, message_t* out
 }
 
 static int handle_evt(device_manager_t* mgr, module_registry_t* reg, const message_t* in, message_t* out){
-    switch(in->type){
+  (void)mgr;
+  (void)out;
+
+  switch(in->type){
     case TYPE_REGISTER:
       if(!in->has_dev){
         return 0;
       }
 
-      // 지금은 간단히 dev 기준으로 구분
       if(in->dev == 100){
         reg->tmc.registered = 1;
         reg->tmc.type = MODULE_TMC;
@@ -157,6 +159,24 @@ static int handle_evt(device_manager_t* mgr, module_registry_t* reg, const messa
         strncpy(reg->pmc_deposition.name, "pmc_deposition", sizeof(reg->pmc_deposition.name)-1);
 
         printf("[CTC] PMC deposition registered (dev=%d)\n", in->dev);
+      }
+
+      return 0;
+
+    case TYPE_TELEMETRY:
+      if(!in->has_dev){
+        return 0;
+      }
+
+      if(in->dev == 1){
+        printf("[CTC] PMC preclean telemetry: temp=%.2f pressure=%.2f flow=%.2f\n",
+               in->temp, in->pressure, in->flow);
+      } else if(in->dev == 2){
+        printf("[CTC] PMC deposition telemetry: temp=%.2f pressure=%.2f flow=%.2f\n",
+               in->temp, in->pressure, in->flow);
+      } else {
+        printf("[CTC] unknown telemetry: dev=%d temp=%.2f pressure=%.2f flow=%.2f\n",
+               in->dev, in->temp, in->pressure, in->flow);
       }
 
       return 0;
