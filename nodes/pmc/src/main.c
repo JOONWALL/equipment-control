@@ -133,6 +133,12 @@ static int connect_to_eqd(int epfd, const char* host, int port){
   }
 
   printf("[PMC] connected to EQD %s:%d fd=%d\n", host, port, fd);
+
+  conn->type = PEER_EQD;
+  conn->registered = 1;
+  conn->dev_id = -1;
+  printf("[PMC] EQD registered fd=%d\n", conn->fd);
+
   return 0;
 }
 

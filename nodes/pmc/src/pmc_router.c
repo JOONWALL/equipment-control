@@ -26,14 +26,15 @@ int pmc_handle_register(pmc_connection_t* conn, const message_t* msg){
   if(!conn || !msg) return -1;
 
   if(msg->type != TYPE_REGISTER){
-    return 0;
+    return -1;
   }
 
   // equipmentd 등록: REQ REGISTER
-  if(msg->role == ROLE_EVT){
+  if(msg->role == ROLE_REQ){
     conn->type = PEER_EQD;
     conn->registered = 1;
     conn->dev_id = -1;
+    printf("[PMC] EQD registered fd=%d\n", conn->fd);
     return 1;
   }
 
@@ -46,16 +47,23 @@ int pmc_handle_register(pmc_connection_t* conn, const message_t* msg){
     conn->type = PEER_SIM;
     conn->registered = 1;
     conn->dev_id = msg->dev;
+    printf("[PMC] SIM registered dev=%d fd=%d\n", msg->dev, conn->fd);
     return 1;
   }
 
   return -1;
 }
 
+
 int pmc_route_message(pmc_connection_t* from, const message_t* msg){
   pmc_connection_t* target = 0;
 
   if(!from || !msg) return -1;
+
+  if(msg->type == TYPE_REGISTER){
+    return 0;  // REGISTER는 라우팅 안 함
+  }
+  
   if(!from->registered) return -1;
 
   if(from->type == PEER_EQD){
