@@ -10,6 +10,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <stdio.h>
 
 #include "protocol/session.h"
 #include "protocol/line_codec.h"
@@ -21,6 +22,12 @@
 #include <time.h>
 #include "internal/connection.h"
 #include "internal/connection_table.h"
+#include "internal/module_registry.h"
+
+typedef struct {
+  device_manager_t dev_mgr;
+  module_registry_t module_registry;
+} app_ctx_t;
 
 static int make_server(int port){
   int fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -74,14 +81,14 @@ static void make_parse_error(message_t* out){
   out->has_msg = 1;
 }
 
-static int handle_one_line(connection_t* conn, device_manager_t* mgr, const char* line, char* wbuf, size_t wbuf_sz){
+static int handle_one_line(connection_t* conn, app_ctx_t* ctx, const char* line, char* wbuf, size_t wbuf_sz){
   message_t in, out;
   int pr = line_parse(line, &in);
 
   if(pr != 0){
     make_parse_error(&out);
   } else {
-    int rr = router_handle(mgr, &in, &out);
+    int rr = router_handle(&ctx->dev_mgr,&ctx->module_registry, &in, &out);
     if(rr <= 0) return 0;
   }
 
@@ -148,7 +155,7 @@ static void handle_accept_event(int epfd, int sfd){
 static void handle_client_event(
   int epfd,
   connection_t* conn,
-  device_manager_t* dev_mgr,
+  app_ctx_t* ctx,
   char* line,
   size_t line_sz,
   char* wbuf,
@@ -197,7 +204,7 @@ static void handle_client_event(
 
       printf("[RX line] %s\n", line);
 
-      int hr = handle_one_line(conn, dev_mgr, line, wbuf, wbuf_sz);
+      int hr = handle_one_line(conn, ctx, line, wbuf, wbuf_sz);
       if(hr < 0){
         perror("handle_one_line");
         close_connection(epfd, conn);
@@ -215,8 +222,11 @@ static void handle_client_event(
 int main(int argc, char** argv){
   int port = (argc >= 2) ? atoi(argv[1]) : 12345;
 
-  device_manager_t dev_mgr;
-  device_manager_init(&dev_mgr);
+  app_ctx_t ctx;
+
+  device_manager_init(&ctx.dev_mgr);
+  module_registry_init(&ctx.module_registry);
+
 
   char line[512];
   char wbuf[512];
@@ -270,7 +280,7 @@ int main(int argc, char** argv){
         handle_accept_event(epfd, sfd);
       } else {
         connection_t* conn = (connection_t*)events[i].data.ptr;
-        handle_client_event(epfd, conn, &dev_mgr, line, sizeof(line), wbuf, sizeof(wbuf));
+        handle_client_event(epfd, conn, &ctx, line, sizeof(line), wbuf, sizeof(wbuf));
       }
     }
 

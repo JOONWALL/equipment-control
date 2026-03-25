@@ -127,21 +127,52 @@ static int handle_req(device_manager_t* mgr, const message_t* in, message_t* out
   }
 }
 
-static int handle_evt(device_manager_t* mgr, const message_t* in, message_t* out){
-  (void)mgr;
-  (void)in;
-  (void)out;
-  return 0;
+static int handle_evt(device_manager_t* mgr, module_registry_t* reg, const message_t* in, message_t* out){
+    switch(in->type){
+    case TYPE_REGISTER:
+      if(!in->has_dev){
+        return 0;
+      }
+
+      // 지금은 간단히 dev 기준으로 구분
+      if(in->dev == 100){
+        reg->tmc.registered = 1;
+        reg->tmc.type = MODULE_TMC;
+        reg->tmc.dev = in->dev;
+        strncpy(reg->tmc.name, "tmc", sizeof(reg->tmc.name)-1);
+
+        printf("[CTC] TMC registered (dev=%d)\n", in->dev);
+      } else if(in->dev == 1){
+        reg->pmc_preclean.registered = 1;
+        reg->pmc_preclean.type = MODULE_PMC;
+        reg->pmc_preclean.dev = in->dev;
+        strncpy(reg->pmc_preclean.name, "pmc_preclean", sizeof(reg->pmc_preclean.name)-1);
+
+        printf("[CTC] PMC preclean registered (dev=%d)\n", in->dev);
+      } else if(in->dev == 2){
+        reg->pmc_deposition.registered = 1;
+        reg->pmc_deposition.type = MODULE_PMC;
+        reg->pmc_deposition.dev = in->dev;
+        strncpy(reg->pmc_deposition.name, "pmc_deposition", sizeof(reg->pmc_deposition.name)-1);
+
+        printf("[CTC] PMC deposition registered (dev=%d)\n", in->dev);
+      }
+
+      return 0;
+
+    default:
+      return 0;
+  }
 }
 
-int router_handle(device_manager_t* mgr, const message_t* in, message_t* out){
+int router_handle(device_manager_t* mgr, module_registry_t* reg, const message_t* in, message_t* out){
   if(!mgr || !in || !out) return -1;
 
   switch(in->role){
     case ROLE_REQ:
       return handle_req(mgr, in, out);
-    case ROLE_EVT:
-      return handle_evt(mgr, in, out);
+   case ROLE_EVT:
+      return handle_evt(mgr, reg, in, out);
     default:
       return 0;
   }

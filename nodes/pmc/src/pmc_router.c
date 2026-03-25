@@ -30,7 +30,7 @@ int pmc_handle_register(pmc_connection_t* conn, const message_t* msg){
   }
 
   // equipmentd 등록: REQ REGISTER
-  if(msg->role == ROLE_REQ){
+  if(msg->role == ROLE_EVT){
     conn->type = PEER_EQD;
     conn->registered = 1;
     conn->dev_id = -1;
