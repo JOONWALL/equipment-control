@@ -142,20 +142,6 @@ static void handle_accept_event(int epfd, int sfd){
 
     printf("[equipmentd] client connected fd=%d\n", cfd);
 
-    // 현재 PMC 테스트용 REGISTER 유지
-    message_t reg;
-    memset(&reg, 0, sizeof(reg));
-
-    reg.role = ROLE_REQ;
-    reg.type = TYPE_REGISTER;
-    reg.seq = 1;
-    reg.has_seq = 1;
-
-    char buf[512];
-    int len = line_format(&reg, buf, sizeof(buf));
-    if(len > 0){
-      (void)write(cfd, buf, (size_t)len);
-    }
   }
 }
 
@@ -210,29 +196,6 @@ static void handle_client_event(
       }
 
       printf("[RX line] %s\n", line);
-
-      //테스트용 라인 시작
-      static int sent = 0;
-      if(!sent){
-          char wbuf[256];
-          message_t req;
-          memset(&req, 0, sizeof(req));
-
-          req.role = ROLE_REQ;
-          req.type = TYPE_START;
-          req.has_dev = 1;
-          req.dev = 1;
-          req.has_seq = 1;
-          req.seq = 1;
-
-          int wn = line_format(&req, wbuf, sizeof(wbuf));
-          if(wn > 0){
-              write(fd, wbuf, wn);
-              printf("[TX TEST] %s", wbuf);
-              sent = 1;
-          }
-      }
-      //끝
 
       int hr = handle_one_line(conn, dev_mgr, line, wbuf, wbuf_sz);
       if(hr < 0){

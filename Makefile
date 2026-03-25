@@ -12,7 +12,8 @@ SRC_EQUIP = \
   services/equipmentd/src/main.c \
   services/equipmentd/src/router.c \
   services/equipmentd/src/connection_table.c \
-  services/equipmentd/src/device_manager.c
+  services/equipmentd/src/device_manager.c \
+  services/equipmentd/src/module_registry.c
 
 SRC_PMC = \
   nodes/pmc/src/main.c \

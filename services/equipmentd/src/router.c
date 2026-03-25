@@ -28,16 +28,12 @@ static int make_error(const message_t* in, message_t* out, int code, const char*
   return 1;
 }
 
-int router_handle(device_manager_t* mgr, const message_t* in, message_t* out){
+static int handle_req(device_manager_t* mgr, const message_t* in, message_t* out){
   device_state_t state;
   int rc;
 
   if(!mgr || !in || !out) return -1;
 
-  // Phase1 policy 유지: REQ만 응답
-  if(in->role != ROLE_REQ) return 0;
-
-  // seq 필수
   if(!in->has_seq){
     return make_error(in, out, 400, "MISSING_SEQ");
   }
@@ -61,6 +57,7 @@ int router_handle(device_manager_t* mgr, const message_t* in, message_t* out){
       strncpy(out->state, device_state_to_string(state), sizeof(out->state) - 1);
       out->has_state = 1;
       return 1;
+
     case TYPE_RESET:
       if(!in->has_dev){
         return make_error(in, out, 400, "MISSING_DEV");
@@ -127,5 +124,25 @@ int router_handle(device_manager_t* mgr, const message_t* in, message_t* out){
 
     default:
       return make_error(in, out, 404, "UNKNOWN_TYPE");
+  }
+}
+
+static int handle_evt(device_manager_t* mgr, const message_t* in, message_t* out){
+  (void)mgr;
+  (void)in;
+  (void)out;
+  return 0;
+}
+
+int router_handle(device_manager_t* mgr, const message_t* in, message_t* out){
+  if(!mgr || !in || !out) return -1;
+
+  switch(in->role){
+    case ROLE_REQ:
+      return handle_req(mgr, in, out);
+    case ROLE_EVT:
+      return handle_evt(mgr, in, out);
+    default:
+      return 0;
   }
 }
