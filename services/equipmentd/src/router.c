@@ -1,5 +1,6 @@
 #include "internal/router.h"
 #include <string.h>
+#include <stdio.h>
 
 static void resp_base(const message_t* in, message_t* out){
   memset(out, 0, sizeof(*out));
