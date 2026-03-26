@@ -13,6 +13,11 @@ typedef struct {
   int dev;
   int busy;
   char name[32];
+
+  double temp;
+  double pressure;
+  double flow;
+  int has_telemetry;
 } module_info_t;
 
 typedef struct {
@@ -22,5 +27,7 @@ typedef struct {
 } module_registry_t;
 
 void module_registry_init(module_registry_t* reg);
+
+void module_registry_dump(const module_registry_t* reg);
 
 #endif

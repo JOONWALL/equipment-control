@@ -168,15 +168,28 @@ static int handle_evt(device_manager_t* mgr, module_registry_t* reg, const messa
         return 0;
       }
 
+      module_info_t* target = NULL;
+
+      if(in->dev == 1){
+        target = &reg->pmc_preclean;
+      } else if(in->dev == 2){
+        target = &reg->pmc_deposition;
+      }
+
+      if(target){
+        target->temp = in->temp;
+        target->pressure = in->pressure;
+        target->flow = in->flow;
+        target->has_telemetry = 1;
+      } 
+
       if(in->dev == 1){
         printf("[CTC] PMC preclean telemetry: temp=%.2f pressure=%.2f flow=%.2f\n",
-               in->temp, in->pressure, in->flow);
-      } else if(in->dev == 2){
+              in->temp, in->pressure, in->flow);
+      }
+      else if(in->dev == 2){
         printf("[CTC] PMC deposition telemetry: temp=%.2f pressure=%.2f flow=%.2f\n",
-               in->temp, in->pressure, in->flow);
-      } else {
-        printf("[CTC] unknown telemetry: dev=%d temp=%.2f pressure=%.2f flow=%.2f\n",
-               in->dev, in->temp, in->pressure, in->flow);
+              in->temp, in->pressure, in->flow);
       }
 
       return 0;
