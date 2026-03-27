@@ -12,12 +12,15 @@ SRC_EQUIP = \
   services/equipmentd/src/main.c \
   services/equipmentd/src/router.c \
   services/equipmentd/src/connection_table.c \
-  services/equipmentd/src/device_manager.c
+  services/equipmentd/src/device_manager.c \
+  services/equipmentd/src/module_registry.c \
+  services/equipmentd/src/scheduler.c
 
 SRC_PMC = \
   nodes/pmc/src/main.c \
   nodes/pmc/src/pmc_connection.c \
-  nodes/pmc/src/pmc_router.c
+  nodes/pmc/src/pmc_router.c \
+  nodes/pmc/src/interlock.c
 
 SRC_SIM = \
   nodes/deviced/sim/src/main.c \
@@ -25,7 +28,13 @@ SRC_SIM = \
   nodes/deviced/sim/src/process_model.c \
   nodes/deviced/sim/src/telemetry.c
 
-all: equipmentd pmc sim
+SRC_TMC = \
+  nodes/tmc/src/main.c
+
+SRC_HOSTSIM = \
+  services/hostsim/src/main.c
+
+all: equipmentd pmc sim tmc hostsim
 
 equipmentd:
 	$(CC) $(CFLAGS) -o equipmentd_bin $(SRC_COMMON) $(SRC_EQUIP)
@@ -38,3 +47,9 @@ sim:
 
 clean:
 	rm -f equipmentd_bin pmc_bin device_sim_fake
+
+tmc:
+	$(CC) $(CFLAGS) -o tmc_bin $(SRC_COMMON) $(SRC_TMC)
+
+hostsim:
+	$(CC) $(CFLAGS) -o hostsim_bin $(SRC_COMMON) $(SRC_HOSTSIM)

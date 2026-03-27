@@ -16,6 +16,9 @@ typedef struct pmc_connection {
   int registered;
   int dev_id;   // SIM일 때만 유효, EQD는 -1
 
+  char state[32];//상태 문자열 저장해서 인터락 대비
+  int has_state;
+
   session_t session;
   struct pmc_connection* next;
 } pmc_connection_t;
