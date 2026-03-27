@@ -13,12 +13,14 @@ SRC_EQUIP = \
   services/equipmentd/src/router.c \
   services/equipmentd/src/connection_table.c \
   services/equipmentd/src/device_manager.c \
-  services/equipmentd/src/module_registry.c
+  services/equipmentd/src/module_registry.c \
+  services/equipmentd/src/scheduler.c
 
 SRC_PMC = \
   nodes/pmc/src/main.c \
   nodes/pmc/src/pmc_connection.c \
-  nodes/pmc/src/pmc_router.c
+  nodes/pmc/src/pmc_router.c \
+  nodes/pmc/src/interlock.c
 
 SRC_SIM = \
   nodes/deviced/sim/src/main.c \

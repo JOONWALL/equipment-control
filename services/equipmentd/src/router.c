@@ -29,7 +29,7 @@ static int make_error(const message_t* in, message_t* out, int code, const char*
   return 1;
 }
 
-static int handle_req(device_manager_t* mgr, const message_t* in, message_t* out){
+static int handle_req(device_manager_t* mgr, int pmc_fd, const message_t* in, message_t* out){
   device_state_t state;
   int rc;
 
@@ -58,71 +58,19 @@ static int handle_req(device_manager_t* mgr, const message_t* in, message_t* out
       strncpy(out->state, device_state_to_string(state), sizeof(out->state) - 1);
       out->has_state = 1;
       return 1;
-
     case TYPE_RESET:
-      if(!in->has_dev){
-        return make_error(in, out, 400, "MISSING_DEV");
-      }
-
-      rc = device_manager_reset(mgr, in->dev);
-      if(rc == -2){
-        return make_error(in, out, 409, "RESET_REQUIRES_ERROR_STATE");
-      }
-      if(rc != 0){
-        return make_error(in, out, 500, "RESET_FAILED");
-      }
-
-      resp_base(in, out);
-      return 1;
-
     case TYPE_FAULT:
-      if(!in->has_dev){
-        return make_error(in, out, 400, "MISSING_DEV");
-      }
-
-      rc = device_manager_fault(mgr, in->dev);
-      if(rc == -2){
-        return make_error(in, out, 409, "ALREADY_ERROR");
-      }
-      if(rc != 0){
-        return make_error(in, out, 500, "FAULT_FAILED");
-      }
-
-      resp_base(in, out);
-      return 1;
-
     case TYPE_START:
-      if(!in->has_dev){
-        return make_error(in, out, 400, "MISSING_DEV");
-      }
-
-      rc = device_manager_start(mgr, in->dev);
-      if(rc == -2){
-        return make_error(in, out, 409, "INVALID_STATE_TRANSITION");
-      }
-      if(rc != 0){
-        return make_error(in, out, 500, "START_FAILED");
-      }
-
-      resp_base(in, out);
-      return 1;
-
     case TYPE_STOP:
       if(!in->has_dev){
         return make_error(in, out, 400, "MISSING_DEV");
       }
 
-      rc = device_manager_stop(mgr, in->dev);
-      if(rc == -2){
-        return make_error(in, out, 409, "INVALID_STATE_TRANSITION");
-      }
-      if(rc != 0){
-        return make_error(in, out, 500, "STOP_FAILED");
+      if(pmc_fd < 0){
+        return make_error(in, out, 503, "PMC_NOT_CONNECTED");
       }
 
-      resp_base(in, out);
-      return 1;
-
+      return 2;  
     default:
       return make_error(in, out, 404, "UNKNOWN_TYPE");
   }
@@ -162,8 +110,7 @@ static int handle_evt(device_manager_t* mgr, module_registry_t* reg, const messa
       }
 
       return 0;
-
-    case TYPE_TELEMETRY:
+    case TYPE_STATUS:
       if(!in->has_dev){
         return 0;
       }
@@ -174,6 +121,58 @@ static int handle_evt(device_manager_t* mgr, module_registry_t* reg, const messa
         target = &reg->pmc_preclean;
       } else if(in->dev == 2){
         target = &reg->pmc_deposition;
+      }
+
+      if(target){
+        target->registered = 1;
+        target->type = MODULE_PMC;
+        target->dev = in->dev;
+
+        if(in->dev == 1){
+          strncpy(target->name, "pmc_preclean", sizeof(target->name) - 1);
+        } else if(in->dev == 2){
+          strncpy(target->name, "pmc_deposition", sizeof(target->name) - 1);
+        }
+      }
+
+
+      if(target && in->has_state){
+        strncpy(target->current_state, in->state, sizeof(target->current_state)-1);
+        target->current_state[sizeof(target->current_state)-1] = '\0';
+        target->has_state = 1;
+
+        if(strcmp(in->state, "PROCESSING") == 0 ||
+          strcmp(in->state, "READY") == 0){
+          target->busy = 1;
+        } else {
+          target->busy = 0;
+        }
+      }
+
+      return 0;
+    case TYPE_TELEMETRY:
+      if(!in->has_dev){
+        return 0;
+      }
+
+      target = NULL;
+
+      if(in->dev == 1){
+        target = &reg->pmc_preclean;
+      } else if(in->dev == 2){
+        target = &reg->pmc_deposition;
+      }
+
+      if(target){
+        target->registered = 1;
+        target->type = MODULE_PMC;
+        target->dev = in->dev;
+
+        if(in->dev == 1){
+          strncpy(target->name, "pmc_preclean", sizeof(target->name) - 1);
+        } else if(in->dev == 2){
+          strncpy(target->name, "pmc_deposition", sizeof(target->name) - 1);
+        }
       }
 
       if(target){
@@ -199,12 +198,16 @@ static int handle_evt(device_manager_t* mgr, module_registry_t* reg, const messa
   }
 }
 
-int router_handle(device_manager_t* mgr, module_registry_t* reg, const message_t* in, message_t* out){
+int router_handle(device_manager_t* mgr,
+                  module_registry_t* reg,
+                  int pmc_fd,
+                  const message_t* in,
+                  message_t* out){
   if(!mgr || !in || !out) return -1;
 
   switch(in->role){
     case ROLE_REQ:
-      return handle_req(mgr, in, out);
+      return handle_req(mgr, pmc_fd, in, out);
    case ROLE_EVT:
       return handle_evt(mgr, reg, in, out);
     default:

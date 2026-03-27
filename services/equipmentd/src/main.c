@@ -23,10 +23,24 @@
 #include "internal/connection.h"
 #include "internal/connection_table.h"
 #include "internal/module_registry.h"
+#include "internal/scheduler.h"
 
 typedef struct {
   device_manager_t dev_mgr;
   module_registry_t module_registry;
+  int pmc_fd;
+
+  int pending_client_fd;
+  uint32_t pending_seq;
+  uint32_t pending_dev;
+  int pending_valid;
+
+  uint32_t next_seq;
+
+  int preclean_started;
+  int preclean_done;
+  int deposition_started;
+  int deposition_done;
 } app_ctx_t;
 
 static int make_server(int port){
@@ -83,16 +97,108 @@ static void make_parse_error(message_t* out){
 
 static int handle_one_line(connection_t* conn, app_ctx_t* ctx, const char* line, char* wbuf, size_t wbuf_sz){
   message_t in, out;
+  int wn;
   int pr = line_parse(line, &in);
-
+  
   if(pr != 0){
     make_parse_error(&out);
   } else {
-    int rr = router_handle(&ctx->dev_mgr,&ctx->module_registry, &in, &out);
+    if(in.role == ROLE_REQ &&
+      in.type == TYPE_REGISTER &&
+      !in.has_dev){
+      ctx->pmc_fd = conn->fd;
+
+      memset(&out, 0, sizeof(out));
+      out.role = ROLE_RESP;
+      out.type = TYPE_REGISTER;
+
+      if(in.has_seq){
+        out.seq = in.seq;
+        out.has_seq = 1;
+      }
+
+      out.ok = 1;
+      out.has_ok = 1;
+
+      wn = line_format(&out, wbuf, wbuf_sz);
+      if(wn < 0){
+        return -1;
+      }
+
+      if(write(conn->fd, wbuf, (size_t)wn) < 0){
+        return -1;
+      }
+
+      return 1;
+    }
+
+    //
+    if(conn->fd == ctx->pmc_fd &&
+      in.role == ROLE_RESP &&
+      in.has_seq &&
+      in.has_dev &&
+      ctx->pending_valid &&
+      ctx->pending_seq == in.seq &&
+      ctx->pending_dev == in.dev){
+
+      if(ctx->pending_client_fd >= 0){
+        wn = line_format(&in, wbuf, wbuf_sz);
+        if(wn < 0){
+          return -1;
+        }
+
+        if(write(ctx->pending_client_fd, wbuf, (size_t)wn) < 0){
+          return -1;
+        }
+
+        printf("[EQD] relay RESP to fd=%d dev=%u seq=%u\n",
+              ctx->pending_client_fd, in.dev, in.seq);
+      } else {
+        printf("[EQD] scheduler got RESP dev=%u seq=%u\n", in.dev, in.seq);
+      }
+
+      ctx->pending_client_fd = -1;
+      ctx->pending_seq = 0;
+      ctx->pending_dev = 0;
+      ctx->pending_valid = 0;
+
+      return 1;
+    }
+    //
+
+    int rr = router_handle(&ctx->dev_mgr,&ctx->module_registry, ctx->pmc_fd, &in, &out);
+    if(rr == 2){
+      if(ctx->pmc_fd < 0){
+        return -1;
+      }
+
+      if(in.has_seq && in.has_dev){
+        ctx->pending_client_fd = conn->fd;
+        ctx->pending_seq = in.seq;
+        ctx->pending_dev = in.dev;
+        ctx->pending_valid = 1;
+      }
+
+      printf("[EQD] save pending fd=%d dev=%u seq=%u\n",
+       conn->fd, in.dev, in.seq);
+
+
+      wn = line_format(&in, wbuf, wbuf_sz);
+      if(wn < 0){
+        return -1;
+      }
+
+      if(write(ctx->pmc_fd, wbuf, (size_t)wn) < 0){
+        return -1;
+      }
+
+      return 0; // 클라이언트에 즉시 응답 안 함
+    }
+
     if(rr <= 0) return 0;
   }
 
-  int wn = line_format(&out, wbuf, wbuf_sz);
+  wn = line_format(&out, wbuf, wbuf_sz);
   if(wn < 0) return -1;
 
   if(write(conn->fd, wbuf, (size_t)wn) < 0){
@@ -100,6 +206,60 @@ static int handle_one_line(connection_t* conn, app_ctx_t* ctx, const char* line,
   }
 
   return 1;
+}
+
+static void run_scheduler(app_ctx_t* ctx){
+  scheduler_action_t action;
+  message_t req;
+  char wbuf[256];
+  int wn;
+
+  if(!ctx) return;
+  if(ctx->pmc_fd < 0) return;
+
+  printf("[SCHED] preclean reg=%d state=%s / deposition reg=%d state=%s / pending=%d\n",
+       ctx->module_registry.pmc_preclean.registered,
+       ctx->module_registry.pmc_preclean.has_state ? ctx->module_registry.pmc_preclean.current_state : "NONE",
+       ctx->module_registry.pmc_deposition.registered,
+       ctx->module_registry.pmc_deposition.has_state ? ctx->module_registry.pmc_deposition.current_state : "NONE",
+       ctx->pending_valid);
+
+  scheduler_tick(&ctx->module_registry,
+                 ctx->pending_valid,
+                 &ctx->next_seq,
+                 &ctx->preclean_started,
+                 &ctx->preclean_done,
+                 &ctx->deposition_started,
+                 &ctx->deposition_done,
+                 &action);
+
+  if(!action.should_send){
+    return;
+  }
+
+  memset(&req, 0, sizeof(req));
+  req.role = ROLE_REQ;
+  req.type = TYPE_START;
+  req.dev = (uint32_t)action.dev;
+  req.has_dev = 1;
+  req.seq = action.seq;
+  req.has_seq = 1;
+
+  ctx->pending_client_fd = -1;   // scheduler 요청은 외부 client 없음
+  ctx->pending_seq = req.seq;
+  ctx->pending_dev = req.dev;
+  ctx->pending_valid = 1;
+
+  wn = line_format(&req, wbuf, sizeof(wbuf));
+  if(wn < 0){
+    return;
+  }
+
+  if(write(ctx->pmc_fd, wbuf, (size_t)wn) < 0){
+    return;
+  }
+
+  printf("[EQD] scheduler sent START dev=%u seq=%u\n", req.dev, req.seq);
 }
 
 static void handle_accept_event(int epfd, int sfd){
@@ -227,6 +387,19 @@ int main(int argc, char** argv){
   device_manager_init(&ctx.dev_mgr);
   module_registry_init(&ctx.module_registry);
 
+  ctx.pmc_fd = -1;
+
+  ctx.pending_client_fd = -1;
+  ctx.pending_seq = 0;
+  ctx.pending_dev = 0;
+  ctx.pending_valid = 0;
+
+  ctx.next_seq = 1000;
+
+  ctx.preclean_started = 0;
+  ctx.preclean_done = 0;
+  ctx.deposition_started = 0;
+  ctx.deposition_done = 0;
 
   char line[512];
   char wbuf[512];
@@ -283,7 +456,7 @@ int main(int argc, char** argv){
         handle_client_event(epfd, conn, &ctx, line, sizeof(line), wbuf, sizeof(wbuf));
       }
     }
-
+    run_scheduler(&ctx);
     scan_connection_timeout(epfd, now_ms());
   }
 

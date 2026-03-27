@@ -134,6 +134,21 @@ int main(int argc, char* argv[]){
   char line[BUF_SIZE];
   struct timespec ts = {1, 0};
 
+  fsm_tick(&ctx.fsm);
+
+  sim_state_t last_state = ctx.fsm.state;
+  {
+    message_t status_evt;
+    char status_buf[BUF_SIZE];
+    int status_len;
+
+    telemetry_build_status_evt(&status_evt, ctx.dev_id, ctx.fsm.state);
+    status_len = line_format(&status_evt, status_buf, sizeof(status_buf));
+    if(status_len > 0){
+      send(ctx.sock, status_buf, status_len, 0);
+    }
+  }
+
   while(1){
     int n = recv(ctx.sock, buf, sizeof(buf), MSG_DONTWAIT);
     if(n > 0){
@@ -155,6 +170,20 @@ int main(int argc, char* argv[]){
     }
 
     fsm_tick(&ctx.fsm);
+
+    if(ctx.fsm.state != last_state){
+      message_t status_evt;
+      char status_buf[BUF_SIZE];
+      int status_len;
+
+      telemetry_build_status_evt(&status_evt, ctx.dev_id, ctx.fsm.state);
+      status_len = line_format(&status_evt, status_buf, sizeof(status_buf));
+      if(status_len > 0){
+        send(ctx.sock, status_buf, status_len, 0);
+      }
+
+      last_state = ctx.fsm.state;
+    }
 
     process_model_apply_state(&ctx.model, ctx.fsm.state);
     process_model_update(&ctx.model);

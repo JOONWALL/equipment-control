@@ -14,6 +14,9 @@ typedef struct {
   int busy;
   char name[32];
 
+  char current_state[32];
+  int has_state;
+
   double temp;
   double pressure;
   double flow;

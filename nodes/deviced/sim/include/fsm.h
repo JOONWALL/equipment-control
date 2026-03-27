@@ -10,6 +10,7 @@ typedef enum {
   SIM_STATE_IDLE,
   SIM_STATE_READY,
   SIM_STATE_PROCESSING,
+  SIM_STATE_DONE,
   SIM_STATE_FAULT,
   SIM_STATE_RECOVERING
 } sim_state_t;
@@ -24,6 +25,7 @@ typedef enum {
 
 typedef struct {
   sim_state_t state;
+  int processing_ticks;
 } fsm_t;
 
 void fsm_init(fsm_t* fsm);
