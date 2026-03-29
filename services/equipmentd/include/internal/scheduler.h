@@ -7,6 +7,17 @@
 extern "C" {
 #endif
 
+typedef enum {
+  JOB_IDLE = 0,
+  JOB_PRECLEAN_SENT,
+  JOB_PRECLEAN_RUNNING,
+  JOB_PRECLEAN_DONE,
+  JOB_DEPOSITION_SENT,
+  JOB_DEPOSITION_RUNNING,
+  JOB_COMPLETE,
+  JOB_ERROR
+} job_state_t;
+
 typedef struct {
   int should_send;
   uint32_t seq;
@@ -16,10 +27,7 @@ typedef struct {
 void scheduler_tick(module_registry_t* reg,
                     int pending_valid,
                     uint32_t* next_seq,
-                    int* preclean_started,
-                    int* preclean_done,
-                    int* deposition_started,
-                    int* deposition_done,
+                    job_state_t* job_state,
                     scheduler_action_t* action);
 
 #ifdef __cplusplus

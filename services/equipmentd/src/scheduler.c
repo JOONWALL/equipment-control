@@ -8,13 +8,9 @@ static int is_state(const module_info_t* m, const char* s){
 void scheduler_tick(module_registry_t* reg,
                     int pending_valid,
                     uint32_t* next_seq,
-                    int* preclean_started,
-                    int* preclean_done,
-                    int* deposition_started,
-                    int* deposition_done,
+                    job_state_t* job_state,
                     scheduler_action_t* action){
-  if(!reg || !next_seq || !preclean_started || !preclean_done ||
-     !deposition_started || !deposition_done || !action){
+  if(!reg || !next_seq || !job_state || !action){
     return;
   }
 
@@ -22,42 +18,70 @@ void scheduler_tick(module_registry_t* reg,
   action->seq = 0;
   action->dev = -1;
 
+  // pending 있으면 새 명령 안 보냄
   if(pending_valid){
     return;
   }
 
-  // preclean DONE 감지
-  if(*preclean_started && !*preclean_done &&
-     is_state(&reg->pmc_preclean, "DONE")){
-    *preclean_done = 1;
-  }
-
-  // deposition DONE 감지
-  if(*deposition_started && !*deposition_done &&
-     is_state(&reg->pmc_deposition, "DONE")){
-    *deposition_done = 1;
-  }
-
-  // 1) preclean 아직 시작 안 했고, IDLE이면 시작
-  if(!*preclean_started &&
-     reg->pmc_preclean.registered &&
-     is_state(&reg->pmc_preclean, "IDLE")){
-    action->should_send = 1;
-    action->dev = 1;
-    action->seq = (*next_seq)++;
-    *preclean_started = 1;
+  // 비정상 상태 우선 감지
+  if(is_state(&reg->pmc_preclean, "FAULT") ||
+     is_state(&reg->pmc_deposition, "FAULT")){
+    *job_state = JOB_ERROR;
     return;
   }
 
-  // 2) preclean 끝났고 deposition 아직 시작 안 했고, deposition이 IDLE이면 시작
-  if(*preclean_done &&
-     !*deposition_started &&
-     reg->pmc_deposition.registered &&
-     is_state(&reg->pmc_deposition, "IDLE")){
-    action->should_send = 1;
-    action->dev = 2;
-    action->seq = (*next_seq)++;
-    *deposition_started = 1;
-    return;
+  switch(*job_state){
+    case JOB_IDLE:
+      if(reg->pmc_preclean.registered &&
+         is_state(&reg->pmc_preclean, "IDLE")){
+        action->should_send = 1;
+        action->dev = 1;
+        action->seq = (*next_seq)++;
+        *job_state = JOB_PRECLEAN_SENT;
+      }
+      break;
+
+    case JOB_PRECLEAN_SENT:
+      if(is_state(&reg->pmc_preclean, "PROCESSING")){
+        *job_state = JOB_PRECLEAN_RUNNING;
+      } else if(is_state(&reg->pmc_preclean, "DONE")){
+        *job_state = JOB_PRECLEAN_DONE;
+      }
+      break;
+
+    case JOB_PRECLEAN_RUNNING:
+      if(is_state(&reg->pmc_preclean, "DONE")){
+        *job_state = JOB_PRECLEAN_DONE;
+      }
+      break;
+
+    case JOB_PRECLEAN_DONE:
+      if(reg->pmc_deposition.registered &&
+         is_state(&reg->pmc_deposition, "IDLE")){
+        action->should_send = 1;
+        action->dev = 2;
+        action->seq = (*next_seq)++;
+        *job_state = JOB_DEPOSITION_SENT;
+      }
+      break;
+
+    case JOB_DEPOSITION_SENT:
+      if(is_state(&reg->pmc_deposition, "PROCESSING")){
+        *job_state = JOB_DEPOSITION_RUNNING;
+      } else if(is_state(&reg->pmc_deposition, "DONE")){
+        *job_state = JOB_COMPLETE;
+      }
+      break;
+
+    case JOB_DEPOSITION_RUNNING:
+      if(is_state(&reg->pmc_deposition, "DONE")){
+        *job_state = JOB_COMPLETE;
+      }
+      break;
+
+    case JOB_COMPLETE:
+    case JOB_ERROR:
+    default:
+      break;
   }
 }
