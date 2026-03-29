@@ -25,6 +25,7 @@ void process_model_apply_state(process_model_t* m, sim_state_t s){
 
     case SIM_STATE_IDLE:
     case SIM_STATE_READY:
+    case SIM_STATE_DONE:
       m->heater_on = 0;
       m->pump_on = 0;
       break;

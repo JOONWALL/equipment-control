@@ -37,10 +37,8 @@ typedef struct {
 
   uint32_t next_seq;
 
-  int preclean_started;
-  int preclean_done;
-  int deposition_started;
-  int deposition_done;
+  job_state_t job_state;
+  
 } app_ctx_t;
 
 static int make_server(int port){
@@ -217,7 +215,8 @@ static void run_scheduler(app_ctx_t* ctx){
   if(!ctx) return;
   if(ctx->pmc_fd < 0) return;
 
-  printf("[SCHED] preclean reg=%d state=%s / deposition reg=%d state=%s / pending=%d\n",
+  printf("[SCHED] job=%d preclean(reg=%d state=%s) deposition(reg=%d state=%s) pending=%d\n",
+       ctx->job_state,
        ctx->module_registry.pmc_preclean.registered,
        ctx->module_registry.pmc_preclean.has_state ? ctx->module_registry.pmc_preclean.current_state : "NONE",
        ctx->module_registry.pmc_deposition.registered,
@@ -225,13 +224,10 @@ static void run_scheduler(app_ctx_t* ctx){
        ctx->pending_valid);
 
   scheduler_tick(&ctx->module_registry,
-                 ctx->pending_valid,
-                 &ctx->next_seq,
-                 &ctx->preclean_started,
-                 &ctx->preclean_done,
-                 &ctx->deposition_started,
-                 &ctx->deposition_done,
-                 &action);
+               ctx->pending_valid,
+               &ctx->next_seq,
+               &ctx->job_state,
+               &action);
 
   if(!action.should_send){
     return;
@@ -396,10 +392,7 @@ int main(int argc, char** argv){
 
   ctx.next_seq = 1000;
 
-  ctx.preclean_started = 0;
-  ctx.preclean_done = 0;
-  ctx.deposition_started = 0;
-  ctx.deposition_done = 0;
+  ctx.job_state = JOB_IDLE;
 
   char line[512];
   char wbuf[512];
