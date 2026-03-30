@@ -1,4 +1,5 @@
 #include "internal/router.h"
+#include "util/time.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -147,6 +148,12 @@ static int handle_evt(device_manager_t* mgr, module_registry_t* reg, const messa
         } else {
           target->busy = 0;
         }
+
+        if(strcmp(in->state, "FAULT") == 0){
+          target->fault_latched = 1;
+        }
+
+        module_registry_touch_status(target, now_ms(), in->state);
       }
 
       return 0;
@@ -180,7 +187,8 @@ static int handle_evt(device_manager_t* mgr, module_registry_t* reg, const messa
         target->pressure = in->pressure;
         target->flow = in->flow;
         target->has_telemetry = 1;
-      } 
+        module_registry_touch_telemetry(target, now_ms());
+      }
 
       if(in->dev == 1){
         printf("[CTC] PMC preclean telemetry: temp=%.2f pressure=%.2f flow=%.2f\n",

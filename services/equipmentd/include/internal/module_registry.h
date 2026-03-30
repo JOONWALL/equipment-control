@@ -21,6 +21,14 @@ typedef struct {
   double pressure;
   double flow;
   int has_telemetry;
+
+  long long last_update_ms;
+  long long last_status_ms;
+  long long last_telemetry_ms;
+  long long last_state_change_ms;
+  int healthy;
+  int fault_latched;
+
 } module_info_t;
 
 typedef struct {
@@ -32,5 +40,15 @@ typedef struct {
 void module_registry_init(module_registry_t* reg);
 
 void module_registry_dump(const module_registry_t* reg);
+
+void module_registry_touch(module_info_t* m, long long now_ms);
+
+int module_registry_is_stale(const module_info_t* m, long long now_ms, long long stale_ms);
+
+void module_registry_touch_status(module_info_t* m, long long now_ms, const char* new_state);
+
+void module_registry_touch_telemetry(module_info_t* m, long long now_ms);
+
+int module_registry_is_stale(const module_info_t* m, long long now_ms, long long stale_ms);
 
 #endif
