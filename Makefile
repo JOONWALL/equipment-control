@@ -6,7 +6,8 @@ CFLAGS=-std=c11 -O2 -Wall -Wextra -Icommon/include -Iservices/equipmentd/include
 
 SRC_COMMON = \
   common/src/protocol/line_codec.c \
-  common/src/protocol/session.c
+  common/src/protocol/session.c \
+  common/src/time.c
 
 SRC_EQUIP = \
   services/equipmentd/src/main.c \
@@ -14,7 +15,8 @@ SRC_EQUIP = \
   services/equipmentd/src/connection_table.c \
   services/equipmentd/src/device_manager.c \
   services/equipmentd/src/module_registry.c \
-  services/equipmentd/src/scheduler.c
+  services/equipmentd/src/scheduler.c \
+  services/equipmentd/src/request_tracker.c
 
 SRC_PMC = \
   nodes/pmc/src/main.c \
