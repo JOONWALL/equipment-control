@@ -48,7 +48,7 @@ sim:
 	$(CC) $(CFLAGS) -o device_sim_fake $(SRC_COMMON) $(SRC_SIM)
 
 clean:
-	rm -f equipmentd_bin pmc_bin device_sim_fake
+	rm -f equipmentd_bin pmc_bin device_sim_fake tmc_bin hostsim_bin
 
 tmc:
 	$(CC) $(CFLAGS) -o tmc_bin $(SRC_COMMON) $(SRC_TMC)
