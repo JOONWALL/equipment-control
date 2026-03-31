@@ -49,6 +49,4 @@ void module_registry_touch_status(module_info_t* m, long long now_ms, const char
 
 void module_registry_touch_telemetry(module_info_t* m, long long now_ms);
 
-int module_registry_is_stale(const module_info_t* m, long long now_ms, long long stale_ms);
-
 #endif
