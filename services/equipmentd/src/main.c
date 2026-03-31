@@ -31,6 +31,7 @@ typedef struct {
   device_manager_t dev_mgr;
   module_registry_t module_registry;
   int pmc_fd;
+  int tmc_fd;
 
   request_tracker_t tracker;
 
@@ -82,6 +83,25 @@ static int tracker_has_pending(const request_tracker_t* t){
   return 0;
 }
 
+static int resolve_target_fd(const app_ctx_t* ctx, uint32_t dev){
+  if(!ctx) return -1;
+
+  if(dev == 100){
+    return ctx->tmc_fd;
+  }
+
+  if(dev == 1 || dev == 2){
+    return ctx->pmc_fd;
+  }
+
+  return -1;
+}
+
+static int is_controller_fd(const app_ctx_t* ctx, int fd){
+  if(!ctx) return 0;
+  return fd == ctx->pmc_fd || fd == ctx->tmc_fd;
+}
+
 static void close_connection(int epfd, connection_t* conn){
   if(!conn) return;
 
@@ -108,43 +128,57 @@ static int handle_one_line(connection_t* conn, app_ctx_t* ctx, const char* line,
   message_t in, out;
   int wn;
   int pr = line_parse(line, &in);
-  
+
   if(pr != 0){
     make_parse_error(&out);
   } else {
     if(in.role == ROLE_REQ &&
-      in.type == TYPE_REGISTER &&
-      !in.has_dev){
-      ctx->pmc_fd = conn->fd;
+       in.type == TYPE_REGISTER){
+      int is_tmc = in.has_dev && in.dev == 100;
 
-      memset(&out, 0, sizeof(out));
-      out.role = ROLE_RESP;
-      out.type = TYPE_REGISTER;
+      if(!in.has_dev || is_tmc){
+        if(is_tmc){
+          ctx->tmc_fd = conn->fd;
+          printf("[EQD] TMC link attached fd=%d dev=%u\n", conn->fd, in.dev);
+        } else {
+          ctx->pmc_fd = conn->fd;
+          printf("[EQD] PMC link attached fd=%d\n", conn->fd);
+        }
 
-      if(in.has_seq){
-        out.seq = in.seq;
-        out.has_seq = 1;
+        memset(&out, 0, sizeof(out));
+        out.role = ROLE_RESP;
+        out.type = TYPE_REGISTER;
+
+        if(in.has_seq){
+          out.seq = in.seq;
+          out.has_seq = 1;
+        }
+
+        if(in.has_dev){
+          out.dev = in.dev;
+          out.has_dev = 1;
+        }
+
+        out.ok = 1;
+        out.has_ok = 1;
+
+        wn = line_format(&out, wbuf, wbuf_sz);
+        if(wn < 0){
+          return -1;
+        }
+
+        if(write(conn->fd, wbuf, (size_t)wn) < 0){
+          return -1;
+        }
+
+        return 1;
       }
-
-      out.ok = 1;
-      out.has_ok = 1;
-
-      wn = line_format(&out, wbuf, wbuf_sz);
-      if(wn < 0){
-        return -1;
-      }
-
-      if(write(conn->fd, wbuf, (size_t)wn) < 0){
-        return -1;
-      }
-
-      return 1;
     }
 
-     {
+    {
       pending_request_t* req = 0;
 
-      if(conn->fd == ctx->pmc_fd &&
+      if(is_controller_fd(ctx, conn->fd) &&
          in.role == ROLE_RESP &&
          in.has_seq &&
          in.has_dev){
@@ -181,6 +215,8 @@ static int handle_one_line(connection_t* conn, app_ctx_t* ctx, const char* line,
                 ctx->module_registry.pmc_preclean.fault_latched = 0;
               } else if(req->dev == 2){
                 ctx->module_registry.pmc_deposition.fault_latched = 0;
+              } else if(req->dev == 100){
+                ctx->module_registry.tmc.fault_latched = 0;
               }
               break;
 
@@ -201,48 +237,63 @@ static int handle_one_line(connection_t* conn, app_ctx_t* ctx, const char* line,
       }
     }
 
-    int rr = router_handle(&ctx->dev_mgr,&ctx->module_registry, ctx->pmc_fd, &in, &out);
-    if(rr == 2){
-      pending_request_t* req = 0;
+    {
+      int rr = router_handle(&ctx->dev_mgr,
+                             &ctx->module_registry,
+                             ctx->pmc_fd,
+                             ctx->tmc_fd,
+                             &in,
+                             &out);
 
-      if(ctx->pmc_fd < 0){
-        return -1;
-      }
+      if(rr == 2){
+        pending_request_t* req = 0;
+        int target_fd = -1;
 
-       if(in.has_seq && in.has_dev){
-        req = request_tracker_alloc(&ctx->tracker);
-        if(!req){
-          fprintf(stderr, "[EQD] request tracker full\n");
+        if(!in.has_dev){
           return -1;
         }
 
-        req->client_fd = conn->fd;
-        req->seq = in.seq;
-        req->dev = in.dev;
-        req->type = in.type;
-        req->from_scheduler = 0;
-        req->created_ms = now_ms();
+        target_fd = resolve_target_fd(ctx, in.dev);
+        if(target_fd < 0){
+          return -1;
+        }
 
-        printf("[EQD] save pending fd=%d dev=%u seq=%u\n",
-               conn->fd, in.dev, in.seq);
+        if(in.has_seq){
+          req = request_tracker_alloc(&ctx->tracker);
+          if(!req){
+            fprintf(stderr, "[EQD] request tracker full\n");
+            return -1;
+          }
+
+          req->client_fd = conn->fd;
+          req->seq = in.seq;
+          req->dev = in.dev;
+          req->type = in.type;
+          req->from_scheduler = 0;
+          req->created_ms = now_ms();
+
+          printf("[EQD] save pending fd=%d dev=%u seq=%u -> target_fd=%d\n",
+                 conn->fd, in.dev, in.seq, target_fd);
+        }
+
+        wn = line_format(&in, wbuf, wbuf_sz);
+        if(wn < 0){
+          request_tracker_remove(&ctx->tracker, req);
+          return -1;
+        }
+
+        if(write(target_fd, wbuf, (size_t)wn) < 0){
+          request_tracker_remove(&ctx->tracker, req);
+          return -1;
+        }
+
+        return 0; // 클라이언트에 즉시 응답 안 함
       }
 
-
-      wn = line_format(&in, wbuf, wbuf_sz);
-      if(wn < 0){
-        request_tracker_remove(&ctx->tracker, req);
-        return -1;
+      if(rr <= 0){
+        return 0;
       }
-
-      if(write(ctx->pmc_fd, wbuf, (size_t)wn) < 0){
-        request_tracker_remove(&ctx->tracker, req);
-        return -1;
-      }
-
-      return 0; // 클라이언트에 즉시 응답 안 함
     }
-
-    if(rr <= 0) return 0;
   }
 
   wn = line_format(&out, wbuf, wbuf_sz);
@@ -412,6 +463,8 @@ static void handle_client_event(
 
     if(n == 0){
       printf("[equipmentd] client closed fd=%d\n", fd);
+      if(fd == ctx->pmc_fd) ctx->pmc_fd = -1;
+      if(fd == ctx->tmc_fd) ctx->tmc_fd = -1;
       close_connection(epfd, conn);
       break;
     }
@@ -421,6 +474,8 @@ static void handle_client_event(
         break;
       }
       perror("read");
+      if(fd == ctx->pmc_fd) ctx->pmc_fd = -1;
+      if(fd == ctx->tmc_fd) ctx->tmc_fd = -1;
       close_connection(epfd, conn);
       break;
     }
@@ -448,6 +503,8 @@ static void handle_client_event(
       int hr = handle_one_line(conn, ctx, line, wbuf, wbuf_sz);
       if(hr < 0){
         perror("handle_one_line");
+        if(fd == ctx->pmc_fd) ctx->pmc_fd = -1;
+        if(fd == ctx->tmc_fd) ctx->tmc_fd = -1;
         close_connection(epfd, conn);
         break;
       }
@@ -469,6 +526,7 @@ int main(int argc, char** argv){
   module_registry_init(&ctx.module_registry);
 
   ctx.pmc_fd = -1;
+  ctx.tmc_fd = -1;
 
   request_tracker_init(&ctx.tracker);
 
