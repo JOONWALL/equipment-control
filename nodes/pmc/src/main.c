@@ -15,6 +15,7 @@
 #include "pmc_router.h"
 #include "protocol/line_codec.h"
 #include "protocol/message.h"
+#include "alarm_manager.h"
 
 #define MAX_EVENTS 16
 #define BUF_SIZE 1024
@@ -265,6 +266,8 @@ int main(int argc, char** argv){
     close(sfd);
     return 1;
   }
+  
+  pmc_alarm_init();
 
   if(connect_to_eqd(epfd, eqd_host, eqd_port) != 0){
     fprintf(stderr, "[PMC] failed to connect to EQD %s:%d\n", eqd_host, eqd_port);
