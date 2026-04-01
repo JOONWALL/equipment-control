@@ -6,7 +6,8 @@ typedef enum {
   PMC_ALARM_MISSING_DEV,
   PMC_ALARM_SIM_NOT_FOUND,
   PMC_ALARM_INTERLOCK_BLOCKED,
-  PMC_ALARM_IO_SEND_FAILED
+  PMC_ALARM_IO_SEND_FAILED,
+  PMC_ALARM_AUX_IO_FAILED
 } pmc_alarm_code_t;
 
 void pmc_alarm_init(void);

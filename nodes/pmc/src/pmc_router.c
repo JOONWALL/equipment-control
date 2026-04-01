@@ -81,10 +81,25 @@ int pmc_route_message(pmc_connection_t* from, const message_t* msg){
         return pmc_io_send_error(from, msg, 409, "PMC_INTERLOCK_BLOCKED");
 
       case PMC_SEQ_ACTION_ROUTE_TO_SIM:
-      default:
+      default: {
+        char aux_reply[128];
+
         printf("[PMC] EQD->SIM type=%d dev=%d\n", msg->type, msg->dev);
         printf("[PMC] before interlock dev=%d has_state=%d state=%s\n",
                target->dev_id, target->has_state, target->state);
+
+        if(pmc_io_apply_aux_for_command(msg->dev,
+                                        msg,
+                                        aux_reply,
+                                        sizeof(aux_reply)) != 0){
+          pmc_alarm_raise(msg->dev,
+                          PMC_ALARM_AUX_IO_FAILED,
+                          aux_reply[0] ? aux_reply : "PICO_IO_FAILED");
+          return pmc_io_send_error(from,
+                                   msg,
+                                   502,
+                                   aux_reply[0] ? aux_reply : "PICO_IO_FAILED");
+        }
 
         if(pmc_io_send_message(target, msg) != 0){
           pmc_alarm_raise(msg->dev, PMC_ALARM_IO_SEND_FAILED, "SIM_CMD_FAILED");
@@ -92,6 +107,7 @@ int pmc_route_message(pmc_connection_t* from, const message_t* msg){
         }
 
         return 0;
+      }
     }
   }
 
