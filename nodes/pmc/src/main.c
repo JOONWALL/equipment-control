@@ -16,6 +16,7 @@
 #include "protocol/line_codec.h"
 #include "protocol/message.h"
 #include "alarm_manager.h"
+#include "io_manager.h"
 
 #define MAX_EVENTS 16
 #define BUF_SIZE 1024
@@ -268,6 +269,24 @@ int main(int argc, char** argv){
   }
   
   pmc_alarm_init();
+
+  pmc_io_uart_aux_clear();
+
+  {
+    const char* pico_port = getenv("PMC_PICO_PORT");
+    const char* pico_baud = getenv("PMC_PICO_BAUD");
+
+    if(pico_port && pico_port[0]){
+      int baud = (pico_baud && pico_baud[0]) ? atoi(pico_baud) : 115200;
+
+      if(pmc_io_uart_aux_configure(pico_port, baud) == 0){
+        printf("[PMC] Pico aux enabled path=%s baud=%d\n", pico_port, baud);
+      } else {
+        fprintf(stderr, "[PMC] failed to configure Pico aux path=%s baud=%d\n",
+                pico_port, baud);
+      }
+    }
+  }
 
   if(connect_to_eqd(epfd, eqd_host, eqd_port) != 0){
     fprintf(stderr, "[PMC] failed to connect to EQD %s:%d\n", eqd_host, eqd_port);
