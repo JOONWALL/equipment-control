@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #define CONN_IDLE_TIMEOUT_MS 60000 //60초 idle → connection close
 #define MAX_CONN 1024
+#define MODULE_STALE_MS 3000
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -24,16 +25,15 @@
 #include "internal/connection_table.h"
 #include "internal/module_registry.h"
 #include "internal/scheduler.h"
+#include "internal/request_tracker.h"
 
 typedef struct {
   device_manager_t dev_mgr;
   module_registry_t module_registry;
   int pmc_fd;
+  int tmc_fd;
 
-  int pending_client_fd;
-  uint32_t pending_seq;
-  uint32_t pending_dev;
-  int pending_valid;
+  request_tracker_t tracker;
 
   uint32_t next_seq;
 
@@ -71,6 +71,37 @@ static long long now_ms(void){
   return (long long)ts.tv_sec * 1000LL + ts.tv_nsec / 1000000LL;
 }
 
+static int tracker_has_pending(const request_tracker_t* t){
+  if(!t) return 0;
+
+  for(int i = 0; i < REQUEST_TRACKER_MAX; i++){
+    if(t->items[i].valid){
+      return 1;
+    }
+  }
+
+  return 0;
+}
+
+static int resolve_target_fd(const app_ctx_t* ctx, uint32_t dev){
+  if(!ctx) return -1;
+
+  if(dev == 100){
+    return ctx->tmc_fd;
+  }
+
+  if(dev == 1 || dev == 2){
+    return ctx->pmc_fd;
+  }
+
+  return -1;
+}
+
+static int is_controller_fd(const app_ctx_t* ctx, int fd){
+  if(!ctx) return 0;
+  return fd == ctx->pmc_fd || fd == ctx->tmc_fd;
+}
+
 static void close_connection(int epfd, connection_t* conn){
   if(!conn) return;
 
@@ -97,103 +128,172 @@ static int handle_one_line(connection_t* conn, app_ctx_t* ctx, const char* line,
   message_t in, out;
   int wn;
   int pr = line_parse(line, &in);
-  
+
   if(pr != 0){
     make_parse_error(&out);
   } else {
     if(in.role == ROLE_REQ &&
-      in.type == TYPE_REGISTER &&
-      !in.has_dev){
-      ctx->pmc_fd = conn->fd;
+       in.type == TYPE_REGISTER){
+      int is_tmc = in.has_dev && in.dev == 100;
 
-      memset(&out, 0, sizeof(out));
-      out.role = ROLE_RESP;
-      out.type = TYPE_REGISTER;
+      if(!in.has_dev || is_tmc){
+        if(is_tmc){
+          ctx->tmc_fd = conn->fd;
+          printf("[EQD] TMC link attached fd=%d dev=%u\n", conn->fd, in.dev);
+        } else {
+          ctx->pmc_fd = conn->fd;
+          printf("[EQD] PMC link attached fd=%d\n", conn->fd);
+        }
 
-      if(in.has_seq){
-        out.seq = in.seq;
-        out.has_seq = 1;
-      }
+        memset(&out, 0, sizeof(out));
+        out.role = ROLE_RESP;
+        out.type = TYPE_REGISTER;
 
-      out.ok = 1;
-      out.has_ok = 1;
+        if(in.has_seq){
+          out.seq = in.seq;
+          out.has_seq = 1;
+        }
 
-      wn = line_format(&out, wbuf, wbuf_sz);
-      if(wn < 0){
-        return -1;
-      }
+        if(in.has_dev){
+          out.dev = in.dev;
+          out.has_dev = 1;
+        }
 
-      if(write(conn->fd, wbuf, (size_t)wn) < 0){
-        return -1;
-      }
+        out.ok = 1;
+        out.has_ok = 1;
 
-      return 1;
-    }
-
-    //
-    if(conn->fd == ctx->pmc_fd &&
-      in.role == ROLE_RESP &&
-      in.has_seq &&
-      in.has_dev &&
-      ctx->pending_valid &&
-      ctx->pending_seq == in.seq &&
-      ctx->pending_dev == in.dev){
-
-      if(ctx->pending_client_fd >= 0){
-        wn = line_format(&in, wbuf, wbuf_sz);
+        wn = line_format(&out, wbuf, wbuf_sz);
         if(wn < 0){
           return -1;
         }
 
-        if(write(ctx->pending_client_fd, wbuf, (size_t)wn) < 0){
+        if(write(conn->fd, wbuf, (size_t)wn) < 0){
           return -1;
         }
 
-        printf("[EQD] relay RESP to fd=%d dev=%u seq=%u\n",
-              ctx->pending_client_fd, in.dev, in.seq);
-      } else {
-        printf("[EQD] scheduler got RESP dev=%u seq=%u\n", in.dev, in.seq);
+        return 1;
       }
-
-      ctx->pending_client_fd = -1;
-      ctx->pending_seq = 0;
-      ctx->pending_dev = 0;
-      ctx->pending_valid = 0;
-
-      return 1;
-    }
-    //
-
-    int rr = router_handle(&ctx->dev_mgr,&ctx->module_registry, ctx->pmc_fd, &in, &out);
-    if(rr == 2){
-      if(ctx->pmc_fd < 0){
-        return -1;
-      }
-
-      if(in.has_seq && in.has_dev){
-        ctx->pending_client_fd = conn->fd;
-        ctx->pending_seq = in.seq;
-        ctx->pending_dev = in.dev;
-        ctx->pending_valid = 1;
-      }
-
-      printf("[EQD] save pending fd=%d dev=%u seq=%u\n",
-       conn->fd, in.dev, in.seq);
-
-
-      wn = line_format(&in, wbuf, wbuf_sz);
-      if(wn < 0){
-        return -1;
-      }
-
-      if(write(ctx->pmc_fd, wbuf, (size_t)wn) < 0){
-        return -1;
-      }
-
-      return 0; // 클라이언트에 즉시 응답 안 함
     }
 
-    if(rr <= 0) return 0;
+    {
+      pending_request_t* req = 0;
+
+      if(is_controller_fd(ctx, conn->fd) &&
+         in.role == ROLE_RESP &&
+         in.has_seq &&
+         in.has_dev){
+        req = request_tracker_find(&ctx->tracker, in.seq, in.dev);
+      }
+
+      if(req){
+        if(req->client_fd >= 0){
+          wn = line_format(&in, wbuf, wbuf_sz);
+          if(wn < 0){
+            return -1;
+          }
+
+          if(write(req->client_fd, wbuf, (size_t)wn) < 0){
+            return -1;
+          }
+
+          printf("[EQD] relay RESP to fd=%d dev=%u seq=%u\n",
+                 req->client_fd, in.dev, in.seq);
+        } else {
+          printf("[EQD] scheduler got RESP dev=%u seq=%u\n", in.dev, in.seq);
+        }
+
+        if(in.type != TYPE_ERROR && in.has_ok && in.ok == 1){
+          switch(req->type){
+            case TYPE_STOP:
+              ctx->job_state = JOB_STOPPED;
+              break;
+
+            case TYPE_RESET:
+              ctx->job_state = JOB_IDLE;
+
+              if(req->dev == 1){
+                ctx->module_registry.pmc_preclean.fault_latched = 0;
+              } else if(req->dev == 2){
+                ctx->module_registry.pmc_deposition.fault_latched = 0;
+              } else if(req->dev == 100){
+                ctx->module_registry.tmc.fault_latched = 0;
+              }
+              break;
+
+            case TYPE_FAULT:
+              ctx->job_state = JOB_ERROR;
+              break;
+
+            default:
+              break;
+          }
+
+          printf("[EQD] job state updated to %d by pending_type=%d\n",
+                 ctx->job_state, req->type);
+        }
+
+        request_tracker_remove(&ctx->tracker, req);
+        return 1;
+      }
+    }
+
+    {
+      int rr = router_handle(&ctx->dev_mgr,
+                             &ctx->module_registry,
+                             ctx->pmc_fd,
+                             ctx->tmc_fd,
+                             &in,
+                             &out);
+
+      if(rr == 2){
+        pending_request_t* req = 0;
+        int target_fd = -1;
+
+        if(!in.has_dev){
+          return -1;
+        }
+
+        target_fd = resolve_target_fd(ctx, in.dev);
+        if(target_fd < 0){
+          return -1;
+        }
+
+        if(in.has_seq){
+          req = request_tracker_alloc(&ctx->tracker);
+          if(!req){
+            fprintf(stderr, "[EQD] request tracker full\n");
+            return -1;
+          }
+
+          req->client_fd = conn->fd;
+          req->seq = in.seq;
+          req->dev = in.dev;
+          req->type = in.type;
+          req->from_scheduler = 0;
+          req->created_ms = now_ms();
+
+          printf("[EQD] save pending fd=%d dev=%u seq=%u -> target_fd=%d\n",
+                 conn->fd, in.dev, in.seq, target_fd);
+        }
+
+        wn = line_format(&in, wbuf, wbuf_sz);
+        if(wn < 0){
+          request_tracker_remove(&ctx->tracker, req);
+          return -1;
+        }
+
+        if(write(target_fd, wbuf, (size_t)wn) < 0){
+          request_tracker_remove(&ctx->tracker, req);
+          return -1;
+        }
+
+        return 0; // 클라이언트에 즉시 응답 안 함
+      }
+
+      if(rr <= 0){
+        return 0;
+      }
+    }
   }
 
   wn = line_format(&out, wbuf, wbuf_sz);
@@ -206,30 +306,62 @@ static int handle_one_line(connection_t* conn, app_ctx_t* ctx, const char* line,
   return 1;
 }
 
+static void refresh_module_health(module_registry_t* reg){
+  long long now;
+
+  if(!reg) return;
+
+  now = now_ms();
+
+  reg->pmc_preclean.healthy =
+      !module_registry_is_stale(&reg->pmc_preclean, now, MODULE_STALE_MS);
+
+  reg->pmc_deposition.healthy =
+      !module_registry_is_stale(&reg->pmc_deposition, now, MODULE_STALE_MS);
+
+  reg->tmc.healthy =
+      !module_registry_is_stale(&reg->tmc, now, MODULE_STALE_MS);
+}
+
 static void run_scheduler(app_ctx_t* ctx){
   scheduler_action_t action;
   message_t req;
   char wbuf[256];
   int wn;
+  int pending_valid;
+  pending_request_t* req_slot;
 
   if(!ctx) return;
+
+  refresh_module_health(&ctx->module_registry);
+
   if(ctx->pmc_fd < 0) return;
 
-  printf("[SCHED] job=%d preclean(reg=%d state=%s) deposition(reg=%d state=%s) pending=%d\n",
-       ctx->job_state,
+  pending_valid = tracker_has_pending(&ctx->tracker);
+
+  printf("[SCHED] job=%s preclean(reg=%d healthy=%d state=%s) deposition(reg=%d healthy=%d state=%s) pending=%d\n",
+       job_state_to_string(ctx->job_state),
        ctx->module_registry.pmc_preclean.registered,
+       ctx->module_registry.pmc_preclean.healthy,
        ctx->module_registry.pmc_preclean.has_state ? ctx->module_registry.pmc_preclean.current_state : "NONE",
        ctx->module_registry.pmc_deposition.registered,
+       ctx->module_registry.pmc_deposition.healthy,
        ctx->module_registry.pmc_deposition.has_state ? ctx->module_registry.pmc_deposition.current_state : "NONE",
-       ctx->pending_valid);
+       pending_valid);
 
   scheduler_tick(&ctx->module_registry,
-               ctx->pending_valid,
-               &ctx->next_seq,
-               &ctx->job_state,
-               &action);
+                 pending_valid,
+                 &ctx->next_seq,
+                 &ctx->job_state,
+                 &action);
 
   if(!action.should_send){
+    return;
+  }
+
+  req_slot = request_tracker_alloc(&ctx->tracker);
+  if(!req_slot){
+    fprintf(stderr, "[EQD] request tracker full for scheduler\n");
     return;
   }
 
@@ -241,17 +373,21 @@ static void run_scheduler(app_ctx_t* ctx){
   req.seq = action.seq;
   req.has_seq = 1;
 
-  ctx->pending_client_fd = -1;   // scheduler 요청은 외부 client 없음
-  ctx->pending_seq = req.seq;
-  ctx->pending_dev = req.dev;
-  ctx->pending_valid = 1;
+  req_slot->client_fd = -1;
+  req_slot->seq = req.seq;
+  req_slot->dev = req.dev;
+  req_slot->type = TYPE_START;
+  req_slot->from_scheduler = 1;
+  req_slot->created_ms = now_ms();
 
   wn = line_format(&req, wbuf, sizeof(wbuf));
   if(wn < 0){
+    request_tracker_remove(&ctx->tracker, req_slot);
     return;
   }
 
   if(write(ctx->pmc_fd, wbuf, (size_t)wn) < 0){
+    request_tracker_remove(&ctx->tracker, req_slot);
     return;
   }
 
@@ -327,6 +463,8 @@ static void handle_client_event(
 
     if(n == 0){
       printf("[equipmentd] client closed fd=%d\n", fd);
+      if(fd == ctx->pmc_fd) ctx->pmc_fd = -1;
+      if(fd == ctx->tmc_fd) ctx->tmc_fd = -1;
       close_connection(epfd, conn);
       break;
     }
@@ -336,6 +474,8 @@ static void handle_client_event(
         break;
       }
       perror("read");
+      if(fd == ctx->pmc_fd) ctx->pmc_fd = -1;
+      if(fd == ctx->tmc_fd) ctx->tmc_fd = -1;
       close_connection(epfd, conn);
       break;
     }
@@ -363,6 +503,8 @@ static void handle_client_event(
       int hr = handle_one_line(conn, ctx, line, wbuf, wbuf_sz);
       if(hr < 0){
         perror("handle_one_line");
+        if(fd == ctx->pmc_fd) ctx->pmc_fd = -1;
+        if(fd == ctx->tmc_fd) ctx->tmc_fd = -1;
         close_connection(epfd, conn);
         break;
       }
@@ -384,16 +526,14 @@ int main(int argc, char** argv){
   module_registry_init(&ctx.module_registry);
 
   ctx.pmc_fd = -1;
+  ctx.tmc_fd = -1;
 
-  ctx.pending_client_fd = -1;
-  ctx.pending_seq = 0;
-  ctx.pending_dev = 0;
-  ctx.pending_valid = 0;
+  request_tracker_init(&ctx.tracker);
 
   ctx.next_seq = 1000;
 
   ctx.job_state = JOB_IDLE;
-
+  
   char line[512];
   char wbuf[512];
 
@@ -450,6 +590,7 @@ int main(int argc, char** argv){
       }
     }
     run_scheduler(&ctx);
+    request_tracker_sweep_timeouts(&ctx.tracker, now_ms());
     scan_connection_timeout(epfd, now_ms());
   }
 

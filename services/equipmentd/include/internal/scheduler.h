@@ -14,9 +14,12 @@ typedef enum {
   JOB_PRECLEAN_DONE,
   JOB_DEPOSITION_SENT,
   JOB_DEPOSITION_RUNNING,
+  JOB_STOPPED,
   JOB_COMPLETE,
   JOB_ERROR
 } job_state_t;
+
+const char* job_state_to_string(job_state_t s);
 
 typedef struct {
   int should_send;

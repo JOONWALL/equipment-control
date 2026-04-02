@@ -6,7 +6,8 @@ CFLAGS=-std=c11 -O2 -Wall -Wextra -Icommon/include -Iservices/equipmentd/include
 
 SRC_COMMON = \
   common/src/protocol/line_codec.c \
-  common/src/protocol/session.c
+  common/src/protocol/session.c \
+  common/src/time.c
 
 SRC_EQUIP = \
   services/equipmentd/src/main.c \
@@ -14,7 +15,8 @@ SRC_EQUIP = \
   services/equipmentd/src/connection_table.c \
   services/equipmentd/src/device_manager.c \
   services/equipmentd/src/module_registry.c \
-  services/equipmentd/src/scheduler.c
+  services/equipmentd/src/scheduler.c \
+  services/equipmentd/src/request_tracker.c
 
 SRC_PMC = \
   nodes/pmc/src/main.c \
@@ -46,7 +48,7 @@ sim:
 	$(CC) $(CFLAGS) -o device_sim_fake $(SRC_COMMON) $(SRC_SIM)
 
 clean:
-	rm -f equipmentd_bin pmc_bin device_sim_fake
+	rm -f equipmentd_bin pmc_bin device_sim_fake tmc_bin hostsim_bin
 
 tmc:
 	$(CC) $(CFLAGS) -o tmc_bin $(SRC_COMMON) $(SRC_TMC)

@@ -11,6 +11,7 @@ extern "C" {
 int router_handle(device_manager_t* mgr,
                   module_registry_t* reg,
                   int pmc_fd,
+                  int tmc_fd,
                   const message_t* in,
                   message_t* out);
                   
