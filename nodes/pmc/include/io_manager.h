@@ -31,9 +31,9 @@ int pmc_io_uart_set_heater(const char* serial_path,
                            char* reply,
                            int reply_sz);
 
+int pmc_io_uart_aux_configure(const char* serial_path, int baudrate);                           
 void pmc_io_uart_aux_clear(void);
-
-int pmc_io_uart_aux_configure(const char* serial_path, int baudrate);
+void pmc_io_uart_aux_shutdown(void);
 
 int pmc_io_apply_aux_for_command(int dev_id,
                                  const message_t* msg,
