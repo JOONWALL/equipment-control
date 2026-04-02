@@ -15,6 +15,8 @@
 #include "pmc_router.h"
 #include "protocol/line_codec.h"
 #include "protocol/message.h"
+#include "alarm_manager.h"
+#include "io_manager.h"
 
 #define MAX_EVENTS 16
 #define BUF_SIZE 1024
@@ -265,6 +267,34 @@ int main(int argc, char** argv){
     close(sfd);
     return 1;
   }
+  
+  pmc_alarm_init();
+
+  pmc_io_uart_aux_clear();
+
+  {
+    const char* aux_port = getenv("PMC_AUX_PORT");
+    const char* aux_baud = getenv("PMC_AUX_BAUD");
+
+    /* 이전 이름도 호환 유지 */
+    if(!aux_port || !aux_port[0]){
+      aux_port = getenv("PMC_PICO_PORT");
+    }
+    if(!aux_baud || !aux_baud[0]){
+      aux_baud = getenv("PMC_PICO_BAUD");
+    }
+
+    if(aux_port && aux_port[0]){
+      int baud = (aux_baud && aux_baud[0]) ? atoi(aux_baud) : 115200;
+
+      if(pmc_io_uart_aux_configure(aux_port, baud) == 0){
+        printf("[PMC] serial aux enabled path=%s baud=%d\n", aux_port, baud);
+      } else {
+        fprintf(stderr, "[PMC] failed to configure serial aux path=%s baud=%d\n",
+                aux_port, baud);
+      }
+    }
+  }
 
   if(connect_to_eqd(epfd, eqd_host, eqd_port) != 0){
     fprintf(stderr, "[PMC] failed to connect to EQD %s:%d\n", eqd_host, eqd_port);
@@ -336,5 +366,6 @@ int main(int argc, char** argv){
 
   close(epfd);
   close(sfd);
+  pmc_io_uart_aux_shutdown();
   return 0;
 }
