@@ -71,6 +71,8 @@ int serial_link_open(serial_link_t* link, const char* path, int baudrate){
   strncpy(link->path, path, sizeof(link->path) - 1);
   link->path[sizeof(link->path) - 1] = '\0';
 
+  tcflush(fd, TCIOFLUSH);
+
   return 0;
 }
 

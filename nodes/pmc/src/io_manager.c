@@ -51,6 +51,116 @@ static void pmc_aux_drain_boot_lines(void){
   }
 }
 
+static int pmc_aux_reconnect(void){
+  if(!g_uart_aux_cfg.enabled || !g_uart_aux_cfg.serial_path[0]){
+    return -1;
+  }
+
+  printf("[PMC][AUX] reconnect start path=%s baud=%d\n",
+         g_uart_aux_cfg.serial_path,
+         g_uart_aux_cfg.baudrate);
+
+  if(g_uart_aux_cfg.dev.connected){
+    pico_device_close(&g_uart_aux_cfg.dev);
+  }
+
+  g_uart_aux_cfg.dev.link.fd = -1;
+  g_uart_aux_cfg.dev.connected = 0;
+  g_uart_aux_cfg.session_ready = 0;
+
+  if(pico_device_open(&g_uart_aux_cfg.dev,
+                      g_uart_aux_cfg.serial_path,
+                      g_uart_aux_cfg.baudrate) != 0){
+    printf("[PMC][AUX] reconnect failed path=%s baud=%d\n",
+           g_uart_aux_cfg.serial_path,
+           g_uart_aux_cfg.baudrate);
+    return -1;
+  }
+
+  g_uart_aux_cfg.session_ready = 1;
+
+  pmc_aux_sleep_ms(1800);
+  pmc_aux_drain_boot_lines();
+
+  printf("[PMC][AUX] reconnect success path=%s baud=%d\n",
+         g_uart_aux_cfg.serial_path,
+         g_uart_aux_cfg.baudrate);
+
+  return 0;
+}
+
+static int pmc_aux_ping_with_retry(char* reply, int reply_sz){
+  int rc = pico_device_ping(&g_uart_aux_cfg.dev, reply, reply_sz);
+  printf("[PMC][AUX] ping reply='%s' rc=%d\n", reply ? reply : "", rc);
+  if(rc == 0){
+    return 0;
+  }
+
+  printf("[PMC][AUX] ping failed, attempting reconnect\n");
+
+  if(pmc_aux_reconnect() != 0){
+    if(reply && reply_sz > 0){
+      snprintf(reply, (size_t)reply_sz, "%s", "AUX_RECONNECT_FAILED");
+    }
+    return -1;
+  }
+
+  rc = pico_device_ping(&g_uart_aux_cfg.dev, reply, reply_sz);
+  printf("[PMC][AUX] ping reply after reconnect='%s' rc=%d\n", reply ? reply : "", rc);
+  if(rc != 0){
+    g_uart_aux_cfg.session_ready = 0;
+    if(reply && reply_sz > 0){
+      snprintf(reply, (size_t)reply_sz, "%s", "AUX_PING_FAILED_AFTER_RECONNECT");
+    }
+    return -1;
+  }
+
+  return 0;
+}
+
+static int pmc_aux_set_heater_with_retry(int on, char* reply, int reply_sz){
+  int rc = pico_device_set_heater(&g_uart_aux_cfg.dev, on, reply, reply_sz);
+  printf("[PMC][AUX] heater %s reply='%s' rc=%d\n",
+         on ? "ON" : "OFF",
+         reply ? reply : "",
+         rc);
+  if(rc == 0){
+    return 0;
+  }
+
+  printf("[PMC][AUX] heater %s failed, attempting reconnect\n",
+         on ? "ON" : "OFF");
+
+  if(pmc_aux_reconnect() != 0){
+    if(reply && reply_sz > 0){
+      snprintf(reply,
+               (size_t)reply_sz,
+               "%s",
+               on ? "AUX_RECONNECT_FAILED_ON" : "AUX_RECONNECT_FAILED_OFF");
+    }
+    return -1;
+  }
+
+  rc = pico_device_set_heater(&g_uart_aux_cfg.dev, on, reply, reply_sz);
+  printf("[PMC][AUX] heater %s reply after reconnect='%s' rc=%d\n",
+         on ? "ON" : "OFF",
+         reply ? reply : "",
+         rc);
+  if(rc != 0){
+    g_uart_aux_cfg.session_ready = 0;
+    if(reply && reply_sz > 0){
+      snprintf(reply,
+               (size_t)reply_sz,
+               "%s",
+               on ? "AUX_HEATER_ON_FAILED_AFTER_RECONNECT"
+                  : "AUX_HEATER_OFF_FAILED_AFTER_RECONNECT");
+    }
+    return -1;
+  }
+
+  return 0;
+}
+
 int pmc_io_send_message(pmc_connection_t* target, const message_t* msg){
   char outbuf[512];
   int len;
@@ -210,13 +320,16 @@ int pmc_io_uart_aux_configure(const char* serial_path, int baudrate){
           sizeof(g_uart_aux_cfg.serial_path) - 1);
   g_uart_aux_cfg.serial_path[sizeof(g_uart_aux_cfg.serial_path) - 1] = '\0';
   g_uart_aux_cfg.baudrate = baudrate;
+  g_uart_aux_cfg.enabled = 1;
 
   if(pico_device_open(&g_uart_aux_cfg.dev, serial_path, baudrate) != 0){
-    pmc_io_uart_aux_clear();
+    g_uart_aux_cfg.session_ready = 0;
+    printf("[PMC][AUX] initial open failed path=%s baud=%d (will retry later)\n",
+           g_uart_aux_cfg.serial_path,
+           g_uart_aux_cfg.baudrate);
     return -1;
   }
 
-  g_uart_aux_cfg.enabled = 1;
   g_uart_aux_cfg.session_ready = 1;
 
   /* Arduino UNO 계열은 serial open 직후 리셋될 수 있으므로
@@ -245,8 +358,17 @@ int pmc_io_apply_aux_for_command(int dev_id,
     return -1;
   }
 
-  if(!g_uart_aux_cfg.enabled || !g_uart_aux_cfg.session_ready){
+  if(!g_uart_aux_cfg.enabled){
     return 0;
+  }
+
+  if(!g_uart_aux_cfg.session_ready){
+    if(pmc_aux_reconnect() != 0){
+      if(reply && reply_sz > 0){
+        snprintf(reply, (size_t)reply_sz, "%s", "AUX_SESSION_NOT_READY");
+      }
+      return -1;
+    }
   }
 
   /* 우선 dev=1(preclean)에만 aux device 적용 */
@@ -256,7 +378,7 @@ int pmc_io_apply_aux_for_command(int dev_id,
 
   switch(msg->type){
     case TYPE_START:
-      rc = pico_device_ping(&g_uart_aux_cfg.dev, reply, reply_sz);
+      rc = pmc_aux_ping_with_retry(reply, reply_sz);
       if(rc != 0){
         if(reply && reply_sz > 0){
           snprintf(reply, (size_t)reply_sz, "%s", "AUX_PING_FAILED");
@@ -270,7 +392,7 @@ int pmc_io_apply_aux_for_command(int dev_id,
         return -1;
       }
 
-      rc = pico_device_set_heater(&g_uart_aux_cfg.dev, 1, reply, reply_sz);
+      rc = pmc_aux_set_heater_with_retry(1, reply, reply_sz);
       if(rc != 0){
         if(reply && reply_sz > 0){
           snprintf(reply, (size_t)reply_sz, "%s", "AUX_HEATER_ON_FAILED");
@@ -289,7 +411,7 @@ int pmc_io_apply_aux_for_command(int dev_id,
     case TYPE_STOP:
     case TYPE_RESET:
     case TYPE_FAULT:
-      rc = pico_device_set_heater(&g_uart_aux_cfg.dev, 0, reply, reply_sz);
+      rc = pmc_aux_set_heater_with_retry(0, reply, reply_sz);
       if(rc != 0){
         if(reply && reply_sz > 0){
           snprintf(reply, (size_t)reply_sz, "%s", "AUX_HEATER_OFF_FAILED");
