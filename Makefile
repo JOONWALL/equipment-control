@@ -22,7 +22,12 @@ SRC_PMC = \
   nodes/pmc/src/main.c \
   nodes/pmc/src/pmc_connection.c \
   nodes/pmc/src/pmc_router.c \
-  nodes/pmc/src/interlock.c
+  nodes/pmc/src/interlock.c \
+  nodes/pmc/src/io_manager.c \
+  nodes/pmc/src/sequence_manager.c \
+  nodes/pmc/src/alarm_manager.c \
+  nodes/pmc/src/serial_transport.c \
+  nodes/pmc/src/pico_device.c
 
 SRC_SIM = \
   nodes/deviced/sim/src/main.c \

@@ -1,0 +1,572 @@
+#include "io_manager.h"
+
+#include <stdio.h>
+#include <string.h>
+#include <time.h>
+#include <unistd.h>
+
+#include "pico_device.h"
+#include "protocol/line_codec.h"
+
+typedef struct {
+  int enabled;
+  char serial_path[128];
+  int baudrate;
+  pico_device_t dev;
+  int session_ready;
+} pmc_uart_aux_cfg_t;
+
+static pmc_uart_aux_cfg_t g_uart_aux_cfg;
+
+static void pmc_aux_sleep_ms(int ms){
+  struct timespec ts;
+  ts.tv_sec = ms / 1000;
+  ts.tv_nsec = (long)(ms % 1000) * 1000L * 1000L;
+  nanosleep(&ts, NULL);
+}
+
+static int pmc_aux_reply_is(const char* got, const char* expect_prefix){
+  if(!got || !expect_prefix) return 0;
+  return strncmp(got, expect_prefix, strlen(expect_prefix)) == 0;
+}
+
+static void pmc_aux_drain_boot_lines(void){
+  char line[128];
+  int i;
+
+  if(!g_uart_aux_cfg.session_ready){
+    return;
+  }
+
+  for(i = 0; i < 4; i++){
+    int rc = serial_link_read_line(&g_uart_aux_cfg.dev.link,
+                                   line,
+                                   sizeof(line),
+                                   200);
+    if(rc <= 0){
+      break;
+    }
+
+    printf("[PMC][AUX] boot line=%s\n", line);
+  }
+}
+
+static int pmc_aux_reconnect(void){
+  if(!g_uart_aux_cfg.enabled || !g_uart_aux_cfg.serial_path[0]){
+    return -1;
+  }
+
+  printf("[PMC][AUX] reconnect start path=%s baud=%d\n",
+         g_uart_aux_cfg.serial_path,
+         g_uart_aux_cfg.baudrate);
+
+  if(g_uart_aux_cfg.dev.connected){
+    pico_device_close(&g_uart_aux_cfg.dev);
+  }
+
+  g_uart_aux_cfg.dev.link.fd = -1;
+  g_uart_aux_cfg.dev.connected = 0;
+  g_uart_aux_cfg.session_ready = 0;
+
+  if(pico_device_open(&g_uart_aux_cfg.dev,
+                      g_uart_aux_cfg.serial_path,
+                      g_uart_aux_cfg.baudrate) != 0){
+    printf("[PMC][AUX] reconnect failed path=%s baud=%d\n",
+           g_uart_aux_cfg.serial_path,
+           g_uart_aux_cfg.baudrate);
+    return -1;
+  }
+
+  g_uart_aux_cfg.session_ready = 1;
+
+  pmc_aux_sleep_ms(1800);
+  pmc_aux_drain_boot_lines();
+
+  printf("[PMC][AUX] reconnect success path=%s baud=%d\n",
+         g_uart_aux_cfg.serial_path,
+         g_uart_aux_cfg.baudrate);
+
+  return 0;
+}
+
+static int pmc_aux_ping_with_retry(char* reply, int reply_sz){
+  int rc = pico_device_ping(&g_uart_aux_cfg.dev, reply, reply_sz);
+  printf("[PMC][AUX] ping reply='%s' rc=%d\n", reply ? reply : "", rc);
+  if(rc == 0){
+    return 0;
+  }
+
+  printf("[PMC][AUX] ping failed, attempting reconnect\n");
+
+  if(pmc_aux_reconnect() != 0){
+    if(reply && reply_sz > 0){
+      snprintf(reply, (size_t)reply_sz, "%s", "AUX_RECONNECT_FAILED");
+    }
+    return -1;
+  }
+
+  rc = pico_device_ping(&g_uart_aux_cfg.dev, reply, reply_sz);
+  printf("[PMC][AUX] ping reply after reconnect='%s' rc=%d\n", reply ? reply : "", rc);
+  if(rc != 0){
+    g_uart_aux_cfg.session_ready = 0;
+    if(reply && reply_sz > 0){
+      snprintf(reply, (size_t)reply_sz, "%s", "AUX_PING_FAILED_AFTER_RECONNECT");
+    }
+    return -1;
+  }
+
+  return 0;
+}
+
+static int pmc_aux_set_heater_with_retry(int on, char* reply, int reply_sz){
+  int rc = pico_device_set_heater(&g_uart_aux_cfg.dev, on, reply, reply_sz);
+  printf("[PMC][AUX] heater %s reply='%s' rc=%d\n",
+         on ? "ON" : "OFF",
+         reply ? reply : "",
+         rc);
+  if(rc == 0){
+    return 0;
+  }
+
+  printf("[PMC][AUX] heater %s failed, attempting reconnect\n",
+         on ? "ON" : "OFF");
+
+  if(pmc_aux_reconnect() != 0){
+    if(reply && reply_sz > 0){
+      snprintf(reply,
+               (size_t)reply_sz,
+               "%s",
+               on ? "AUX_RECONNECT_FAILED_ON" : "AUX_RECONNECT_FAILED_OFF");
+    }
+    return -1;
+  }
+
+  rc = pico_device_set_heater(&g_uart_aux_cfg.dev, on, reply, reply_sz);
+  printf("[PMC][AUX] heater %s reply after reconnect='%s' rc=%d\n",
+         on ? "ON" : "OFF",
+         reply ? reply : "",
+         rc);
+  if(rc != 0){
+    g_uart_aux_cfg.session_ready = 0;
+    if(reply && reply_sz > 0){
+      snprintf(reply,
+               (size_t)reply_sz,
+               "%s",
+               on ? "AUX_HEATER_ON_FAILED_AFTER_RECONNECT"
+                  : "AUX_HEATER_OFF_FAILED_AFTER_RECONNECT");
+    }
+    return -1;
+  }
+
+  return 0;
+}
+
+static int pmc_aux_read_temp_with_retry(char* reply, int reply_sz){
+  int rc = pico_device_read_temp(&g_uart_aux_cfg.dev, reply, reply_sz);
+  printf("[PMC][AUX] read temp reply='%s' rc=%d\n", reply ? reply : "", rc);
+  if(rc == 0){
+    return 0;
+  }
+
+  printf("[PMC][AUX] read temp failed, attempting reconnect\n");
+
+  if(pmc_aux_reconnect() != 0){
+    if(reply && reply_sz > 0){
+      snprintf(reply, (size_t)reply_sz, "%s", "AUX_RECONNECT_FAILED_TEMP");
+    }
+    return -1;
+  }
+
+  rc = pico_device_read_temp(&g_uart_aux_cfg.dev, reply, reply_sz);
+  printf("[PMC][AUX] read temp reply after reconnect='%s' rc=%d\n",
+         reply ? reply : "", rc);
+  if(rc != 0){
+    g_uart_aux_cfg.session_ready = 0;
+    if(reply && reply_sz > 0){
+      snprintf(reply, (size_t)reply_sz, "%s", "AUX_TEMP_FAILED_AFTER_RECONNECT");
+    }
+    return -1;
+  }
+
+  return 0;
+}
+
+static int pmc_aux_read_heater_with_retry(char* reply, int reply_sz){
+  int rc = pico_device_read_heater(&g_uart_aux_cfg.dev, reply, reply_sz);
+  printf("[PMC][AUX] read heater reply='%s' rc=%d\n", reply ? reply : "", rc);
+  if(rc == 0){
+    return 0;
+  }
+
+  printf("[PMC][AUX] read heater failed, attempting reconnect\n");
+
+  if(pmc_aux_reconnect() != 0){
+    if(reply && reply_sz > 0){
+      snprintf(reply, (size_t)reply_sz, "%s", "AUX_RECONNECT_FAILED_HEATER");
+    }
+    return -1;
+  }
+
+  rc = pico_device_read_heater(&g_uart_aux_cfg.dev, reply, reply_sz);
+  printf("[PMC][AUX] read heater reply after reconnect='%s' rc=%d\n",
+         reply ? reply : "", rc);
+  if(rc != 0){
+    g_uart_aux_cfg.session_ready = 0;
+    if(reply && reply_sz > 0){
+      snprintf(reply, (size_t)reply_sz, "%s", "AUX_HEATER_FAILED_AFTER_RECONNECT");
+    }
+    return -1;
+  }
+
+  return 0;
+}
+
+int pmc_io_send_message(pmc_connection_t* target, const message_t* msg){
+  char outbuf[512];
+  int len;
+
+  if(!target || !msg) return -1;
+
+  len = line_format(msg, outbuf, sizeof(outbuf));
+  if(len <= 0) return -1;
+
+  if(write(target->fd, outbuf, (size_t)len) < 0){
+    return -1;
+  }
+
+  return 0;
+}
+
+int pmc_io_send_error(pmc_connection_t* target,
+                      const message_t* req,
+                      int code,
+                      const char* text){
+  message_t err;
+
+  if(!target || !req) return -1;
+
+  memset(&err, 0, sizeof(err));
+  err.role = ROLE_RESP;
+  err.type = TYPE_ERROR;
+
+  if(req->has_dev){
+    err.dev = req->dev;
+    err.has_dev = 1;
+  }
+
+  if(req->has_seq){
+    err.seq = req->seq;
+    err.has_seq = 1;
+  }
+
+  err.ok = 0;
+  err.has_ok = 1;
+  err.code = code;
+  err.has_code = 1;
+
+  if(text){
+    strncpy(err.msg, text, sizeof(err.msg) - 1);
+    err.msg[sizeof(err.msg) - 1] = '\0';
+    err.has_msg = 1;
+  }
+
+  return pmc_io_send_message(target, &err);
+}
+
+int pmc_io_send_status_cached(pmc_connection_t* eqd_conn,
+                              const message_t* req,
+                              const pmc_connection_t* sim_conn,
+                              const pmc_aux_snapshot_t* aux){
+  message_t resp;
+
+  if(!eqd_conn || !req || !sim_conn) return -1;
+
+  memset(&resp, 0, sizeof(resp));
+  resp.role = ROLE_RESP;
+  resp.type = TYPE_STATUS;
+
+  if(req->has_dev){
+    resp.dev = req->dev;
+    resp.has_dev = 1;
+  }
+
+  if(req->has_seq){
+    resp.seq = req->seq;
+    resp.has_seq = 1;
+  }
+
+  resp.ok = 1;
+  resp.has_ok = 1;
+
+  if(sim_conn->has_state){
+    snprintf(resp.state, sizeof(resp.state), "%s", sim_conn->state);
+  } else {
+    snprintf(resp.state, sizeof(resp.state), "%s", "UNKNOWN");
+  }
+  resp.has_state = 1;
+
+  if(aux && aux->valid){
+    if(aux->heater_known && aux->temp_known){
+      snprintf(resp.msg,
+               sizeof(resp.msg),
+               "aux_%s_%.2fC",
+               aux->heater_on ? "ON" : "OFF",
+               aux->temp_c);
+      resp.has_msg = 1;
+    } else if(aux->heater_known){
+      snprintf(resp.msg,
+               sizeof(resp.msg),
+               "aux_%s",
+               aux->heater_on ? "ON" : "OFF");
+      resp.has_msg = 1;
+    } else if(aux->temp_known){
+      snprintf(resp.msg,
+               sizeof(resp.msg),
+               "aux_temp_%.2fC",
+               aux->temp_c);
+      resp.has_msg = 1;
+    }
+  }
+
+  return pmc_io_send_message(eqd_conn, &resp);
+}
+
+int pmc_io_uart_ping(const char* serial_path,
+                     int baudrate,
+                     char* reply,
+                     int reply_sz){
+  pico_device_t dev;
+  int rc;
+
+  rc = pico_device_open(&dev, serial_path, baudrate);
+  if(rc != 0){
+    return -1;
+  }
+
+  rc = pico_device_ping(&dev, reply, reply_sz);
+  pico_device_close(&dev);
+  return rc;
+}
+
+int pmc_io_uart_read_temp(const char* serial_path,
+                          int baudrate,
+                          char* reply,
+                          int reply_sz){
+  pico_device_t dev;
+  int rc;
+
+  rc = pico_device_open(&dev, serial_path, baudrate);
+  if(rc != 0){
+    return -1;
+  }
+
+  rc = pico_device_read_temp(&dev, reply, reply_sz);
+  pico_device_close(&dev);
+  return rc;
+}
+
+int pmc_io_uart_set_heater(const char* serial_path,
+                           int baudrate,
+                           int on,
+                           char* reply,
+                           int reply_sz){
+  pico_device_t dev;
+  int rc;
+
+  rc = pico_device_open(&dev, serial_path, baudrate);
+  if(rc != 0){
+    return -1;
+  }
+
+  rc = pico_device_set_heater(&dev, on, reply, reply_sz);
+  pico_device_close(&dev);
+  return rc;
+}
+
+void pmc_io_uart_aux_clear(void){
+  if(g_uart_aux_cfg.dev.connected){
+    pico_device_close(&g_uart_aux_cfg.dev);
+  }
+
+  memset(&g_uart_aux_cfg, 0, sizeof(g_uart_aux_cfg));
+  g_uart_aux_cfg.dev.link.fd = -1;
+}
+
+int pmc_io_uart_aux_configure(const char* serial_path, int baudrate){
+  if(!serial_path || !serial_path[0]){
+    return -1;
+  }
+
+  pmc_io_uart_aux_clear();
+
+  strncpy(g_uart_aux_cfg.serial_path,
+          serial_path,
+          sizeof(g_uart_aux_cfg.serial_path) - 1);
+  g_uart_aux_cfg.serial_path[sizeof(g_uart_aux_cfg.serial_path) - 1] = '\0';
+  g_uart_aux_cfg.baudrate = baudrate;
+  g_uart_aux_cfg.enabled = 1;
+
+  if(pico_device_open(&g_uart_aux_cfg.dev, serial_path, baudrate) != 0){
+    g_uart_aux_cfg.session_ready = 0;
+    printf("[PMC][AUX] initial open failed path=%s baud=%d (will retry later)\n",
+           g_uart_aux_cfg.serial_path,
+           g_uart_aux_cfg.baudrate);
+    return -1;
+  }
+
+  g_uart_aux_cfg.session_ready = 1;
+
+  /* Arduino UNO 계열은 serial open 직후 리셋될 수 있으므로
+     부팅 배너가 흘러나올 시간을 주고 한 번 비워준다. */
+  pmc_aux_sleep_ms(1800);
+  pmc_aux_drain_boot_lines();
+
+  return 0;
+}
+
+void pmc_io_uart_aux_shutdown(void){
+  pmc_io_uart_aux_clear();
+}
+
+int pmc_io_apply_aux_for_command(int dev_id,
+                                 const message_t* msg,
+                                 char* reply,
+                                 int reply_sz){
+  int rc;
+
+  if(reply && reply_sz > 0){
+    reply[0] = '\0';
+  }
+
+  if(!msg){
+    return -1;
+  }
+
+  if(!g_uart_aux_cfg.enabled){
+    return 0;
+  }
+
+  if(!g_uart_aux_cfg.session_ready){
+    if(pmc_aux_reconnect() != 0){
+      if(reply && reply_sz > 0){
+        snprintf(reply, (size_t)reply_sz, "%s", "AUX_SESSION_NOT_READY");
+      }
+      return -1;
+    }
+  }
+
+  /* 우선 dev=1(preclean)에만 aux device 적용 */
+  if(dev_id != 1){
+    return 0;
+  }
+
+  switch(msg->type){
+    case TYPE_START:
+      rc = pmc_aux_ping_with_retry(reply, reply_sz);
+      if(rc != 0){
+        if(reply && reply_sz > 0){
+          snprintf(reply, (size_t)reply_sz, "%s", "AUX_PING_FAILED");
+        }
+        return -1;
+      }
+      if(!pmc_aux_reply_is(reply, "OK PONG")){
+        if(reply && reply_sz > 0){
+          snprintf(reply, (size_t)reply_sz, "%s", "AUX_PING_BAD_REPLY");
+        }
+        return -1;
+      }
+
+      rc = pmc_aux_set_heater_with_retry(1, reply, reply_sz);
+      if(rc != 0){
+        if(reply && reply_sz > 0){
+          snprintf(reply, (size_t)reply_sz, "%s", "AUX_HEATER_ON_FAILED");
+        }
+        return -1;
+      }
+      if(!pmc_aux_reply_is(reply, "OK HEATER ON")){
+        if(reply && reply_sz > 0){
+          snprintf(reply, (size_t)reply_sz, "%s", "AUX_HEATER_ON_BAD_REPLY");
+        }
+        return -1;
+      }
+
+      return 0;
+
+    case TYPE_STOP:
+    case TYPE_RESET:
+    case TYPE_FAULT:
+      rc = pmc_aux_set_heater_with_retry(0, reply, reply_sz);
+      if(rc != 0){
+        if(reply && reply_sz > 0){
+          snprintf(reply, (size_t)reply_sz, "%s", "AUX_HEATER_OFF_FAILED");
+        }
+        return -1;
+      }
+      if(!pmc_aux_reply_is(reply, "OK HEATER OFF")){
+        if(reply && reply_sz > 0){
+          snprintf(reply, (size_t)reply_sz, "%s", "AUX_HEATER_OFF_BAD_REPLY");
+        }
+        return -1;
+      }
+
+      return 0;
+
+    default:
+      return 0;
+  }
+}
+
+int pmc_io_read_aux_snapshot(int dev_id, pmc_aux_snapshot_t* out){
+  char heater_reply[64];
+  char temp_reply[64];
+
+  if(!out){
+    return -1;
+  }
+
+  memset(out, 0, sizeof(*out));
+
+  if(dev_id != 1){
+    return 0;
+  }
+
+  if(!g_uart_aux_cfg.enabled){
+    return 0;
+  }
+
+  if(!g_uart_aux_cfg.session_ready){
+    if(pmc_aux_reconnect() != 0){
+      return -1;
+    }
+  }
+
+  if(pmc_aux_read_heater_with_retry(heater_reply, sizeof(heater_reply)) == 0){
+    snprintf(out->heater_raw, sizeof(out->heater_raw), "%s", heater_reply);
+    out->heater_known = 1;
+
+    if(strcmp(heater_reply, "HEATER ON") == 0){
+      out->heater_on = 1;
+    } else if(strcmp(heater_reply, "HEATER OFF") == 0){
+      out->heater_on = 0;
+    } else {
+      out->heater_known = 0;
+    }
+  }
+
+  if(pmc_aux_read_temp_with_retry(temp_reply, sizeof(temp_reply)) == 0){
+    float temp_value = 0.0f;
+
+    snprintf(out->temp_raw, sizeof(out->temp_raw), "%s", temp_reply);
+
+    if(sscanf(temp_reply, "TEMP %f", &temp_value) == 1){
+      out->temp_known = 1;
+      out->temp_c = temp_value;
+    }
+  }
+
+  if(out->heater_known || out->temp_known){
+    out->valid = 1;
+  }
+
+  return 0;
+}
