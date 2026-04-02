@@ -67,12 +67,25 @@ int pmc_route_message(pmc_connection_t* from, const message_t* msg){
                         "SIM_NOT_FOUND");
         return pmc_io_send_error(from, msg, 404, "SIM_NOT_FOUND");
 
-      case PMC_SEQ_ACTION_RESPOND_CACHED_STATUS:
+      case PMC_SEQ_ACTION_RESPOND_CACHED_STATUS: {
+        pmc_aux_snapshot_t aux_snapshot;
+        memset(&aux_snapshot, 0, sizeof(aux_snapshot));
+
         printf("[PMC] EQD->PMC local STATUS dev=%d cached_state=%s has_state=%d\n",
                target->dev_id,
                target->has_state ? target->state : "UNKNOWN",
                target->has_state);
-        return pmc_io_send_status_cached(from, msg, target);
+
+        if(pmc_io_read_aux_snapshot(target->dev_id, &aux_snapshot) == 0 && aux_snapshot.valid){
+          printf("[PMC][AUX] snapshot dev=%d heater=%s temp=%.2f\n",
+                 target->dev_id,
+                 aux_snapshot.heater_known ? (aux_snapshot.heater_on ? "ON" : "OFF") : "UNKNOWN",
+                 aux_snapshot.temp_known ? aux_snapshot.temp_c : -1.0f);
+        }
+
+        return pmc_io_send_status_cached(from, msg, target, &aux_snapshot);
+      }
+        
 
       case PMC_SEQ_ACTION_REJECT_INTERLOCK:
         printf("[PMC] before interlock dev=%d has_state=%d state=%s\n",

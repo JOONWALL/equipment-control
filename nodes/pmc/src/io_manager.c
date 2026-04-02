@@ -161,6 +161,66 @@ static int pmc_aux_set_heater_with_retry(int on, char* reply, int reply_sz){
   return 0;
 }
 
+static int pmc_aux_read_temp_with_retry(char* reply, int reply_sz){
+  int rc = pico_device_read_temp(&g_uart_aux_cfg.dev, reply, reply_sz);
+  printf("[PMC][AUX] read temp reply='%s' rc=%d\n", reply ? reply : "", rc);
+  if(rc == 0){
+    return 0;
+  }
+
+  printf("[PMC][AUX] read temp failed, attempting reconnect\n");
+
+  if(pmc_aux_reconnect() != 0){
+    if(reply && reply_sz > 0){
+      snprintf(reply, (size_t)reply_sz, "%s", "AUX_RECONNECT_FAILED_TEMP");
+    }
+    return -1;
+  }
+
+  rc = pico_device_read_temp(&g_uart_aux_cfg.dev, reply, reply_sz);
+  printf("[PMC][AUX] read temp reply after reconnect='%s' rc=%d\n",
+         reply ? reply : "", rc);
+  if(rc != 0){
+    g_uart_aux_cfg.session_ready = 0;
+    if(reply && reply_sz > 0){
+      snprintf(reply, (size_t)reply_sz, "%s", "AUX_TEMP_FAILED_AFTER_RECONNECT");
+    }
+    return -1;
+  }
+
+  return 0;
+}
+
+static int pmc_aux_read_heater_with_retry(char* reply, int reply_sz){
+  int rc = pico_device_read_heater(&g_uart_aux_cfg.dev, reply, reply_sz);
+  printf("[PMC][AUX] read heater reply='%s' rc=%d\n", reply ? reply : "", rc);
+  if(rc == 0){
+    return 0;
+  }
+
+  printf("[PMC][AUX] read heater failed, attempting reconnect\n");
+
+  if(pmc_aux_reconnect() != 0){
+    if(reply && reply_sz > 0){
+      snprintf(reply, (size_t)reply_sz, "%s", "AUX_RECONNECT_FAILED_HEATER");
+    }
+    return -1;
+  }
+
+  rc = pico_device_read_heater(&g_uart_aux_cfg.dev, reply, reply_sz);
+  printf("[PMC][AUX] read heater reply after reconnect='%s' rc=%d\n",
+         reply ? reply : "", rc);
+  if(rc != 0){
+    g_uart_aux_cfg.session_ready = 0;
+    if(reply && reply_sz > 0){
+      snprintf(reply, (size_t)reply_sz, "%s", "AUX_HEATER_FAILED_AFTER_RECONNECT");
+    }
+    return -1;
+  }
+
+  return 0;
+}
+
 int pmc_io_send_message(pmc_connection_t* target, const message_t* msg){
   char outbuf[512];
   int len;
@@ -215,7 +275,8 @@ int pmc_io_send_error(pmc_connection_t* target,
 
 int pmc_io_send_status_cached(pmc_connection_t* eqd_conn,
                               const message_t* req,
-                              const pmc_connection_t* sim_conn){
+                              const pmc_connection_t* sim_conn,
+                              const pmc_aux_snapshot_t* aux){
   message_t resp;
 
   if(!eqd_conn || !req || !sim_conn) return -1;
@@ -243,6 +304,29 @@ int pmc_io_send_status_cached(pmc_connection_t* eqd_conn,
     snprintf(resp.state, sizeof(resp.state), "%s", "UNKNOWN");
   }
   resp.has_state = 1;
+
+  if(aux && aux->valid){
+    if(aux->heater_known && aux->temp_known){
+      snprintf(resp.msg,
+               sizeof(resp.msg),
+               "aux_%s_%.2fC",
+               aux->heater_on ? "ON" : "OFF",
+               aux->temp_c);
+      resp.has_msg = 1;
+    } else if(aux->heater_known){
+      snprintf(resp.msg,
+               sizeof(resp.msg),
+               "aux_%s",
+               aux->heater_on ? "ON" : "OFF");
+      resp.has_msg = 1;
+    } else if(aux->temp_known){
+      snprintf(resp.msg,
+               sizeof(resp.msg),
+               "aux_temp_%.2fC",
+               aux->temp_c);
+      resp.has_msg = 1;
+    }
+  }
 
   return pmc_io_send_message(eqd_conn, &resp);
 }
@@ -430,4 +514,59 @@ int pmc_io_apply_aux_for_command(int dev_id,
     default:
       return 0;
   }
+}
+
+int pmc_io_read_aux_snapshot(int dev_id, pmc_aux_snapshot_t* out){
+  char heater_reply[64];
+  char temp_reply[64];
+
+  if(!out){
+    return -1;
+  }
+
+  memset(out, 0, sizeof(*out));
+
+  if(dev_id != 1){
+    return 0;
+  }
+
+  if(!g_uart_aux_cfg.enabled){
+    return 0;
+  }
+
+  if(!g_uart_aux_cfg.session_ready){
+    if(pmc_aux_reconnect() != 0){
+      return -1;
+    }
+  }
+
+  if(pmc_aux_read_heater_with_retry(heater_reply, sizeof(heater_reply)) == 0){
+    snprintf(out->heater_raw, sizeof(out->heater_raw), "%s", heater_reply);
+    out->heater_known = 1;
+
+    if(strcmp(heater_reply, "HEATER ON") == 0){
+      out->heater_on = 1;
+    } else if(strcmp(heater_reply, "HEATER OFF") == 0){
+      out->heater_on = 0;
+    } else {
+      out->heater_known = 0;
+    }
+  }
+
+  if(pmc_aux_read_temp_with_retry(temp_reply, sizeof(temp_reply)) == 0){
+    float temp_value = 0.0f;
+
+    snprintf(out->temp_raw, sizeof(out->temp_raw), "%s", temp_reply);
+
+    if(sscanf(temp_reply, "TEMP %f", &temp_value) == 1){
+      out->temp_known = 1;
+      out->temp_c = temp_value;
+    }
+  }
+
+  if(out->heater_known || out->temp_known){
+    out->valid = 1;
+  }
+
+  return 0;
 }

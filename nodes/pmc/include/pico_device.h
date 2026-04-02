@@ -13,6 +13,7 @@ void pico_device_close(pico_device_t* dev);
 
 int pico_device_ping(pico_device_t* dev, char* reply, int reply_sz);
 int pico_device_read_temp(pico_device_t* dev, char* reply, int reply_sz);
+int pico_device_read_heater(pico_device_t* dev, char* reply, int reply_sz);
 int pico_device_set_heater(pico_device_t* dev, int on, char* reply, int reply_sz);
 
 #endif

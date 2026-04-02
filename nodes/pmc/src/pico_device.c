@@ -65,6 +65,10 @@ int pico_device_read_temp(pico_device_t* dev, char* reply, int reply_sz){
   return pico_send_and_wait(dev, "READ TEMP", reply, reply_sz);
 }
 
+int pico_device_read_heater(pico_device_t* dev, char* reply, int reply_sz){
+  return pico_send_and_wait(dev, "READ HEATER", reply, reply_sz);
+}
+
 int pico_device_set_heater(pico_device_t* dev, int on, char* reply, int reply_sz){
   return pico_send_and_wait(dev,
                             on ? "SET HEATER ON" : "SET HEATER OFF",
