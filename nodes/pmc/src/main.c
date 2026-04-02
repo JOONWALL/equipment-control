@@ -273,17 +273,25 @@ int main(int argc, char** argv){
   pmc_io_uart_aux_clear();
 
   {
-    const char* pico_port = getenv("PMC_PICO_PORT");
-    const char* pico_baud = getenv("PMC_PICO_BAUD");
+    const char* aux_port = getenv("PMC_AUX_PORT");
+    const char* aux_baud = getenv("PMC_AUX_BAUD");
 
-    if(pico_port && pico_port[0]){
-      int baud = (pico_baud && pico_baud[0]) ? atoi(pico_baud) : 115200;
+    /* 이전 이름도 호환 유지 */
+    if(!aux_port || !aux_port[0]){
+      aux_port = getenv("PMC_PICO_PORT");
+    }
+    if(!aux_baud || !aux_baud[0]){
+      aux_baud = getenv("PMC_PICO_BAUD");
+    }
 
-      if(pmc_io_uart_aux_configure(pico_port, baud) == 0){
-        printf("[PMC] Pico aux enabled path=%s baud=%d\n", pico_port, baud);
+    if(aux_port && aux_port[0]){
+      int baud = (aux_baud && aux_baud[0]) ? atoi(aux_baud) : 115200;
+
+      if(pmc_io_uart_aux_configure(aux_port, baud) == 0){
+        printf("[PMC] serial aux enabled path=%s baud=%d\n", aux_port, baud);
       } else {
-        fprintf(stderr, "[PMC] failed to configure Pico aux path=%s baud=%d\n",
-                pico_port, baud);
+        fprintf(stderr, "[PMC] failed to configure serial aux path=%s baud=%d\n",
+                aux_port, baud);
       }
     }
   }
@@ -358,5 +366,6 @@ int main(int argc, char** argv){
 
   close(epfd);
   close(sfd);
+  pmc_io_uart_aux_shutdown();
   return 0;
 }
