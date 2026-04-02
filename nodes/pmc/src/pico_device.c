@@ -8,6 +8,7 @@ static int pico_send_and_wait(pico_device_t* dev,
                               char* reply,
                               int reply_sz){
   int rc;
+  int tries;
 
   if(!dev || !dev->connected || !cmd || !reply || reply_sz <= 0){
     return -1;
@@ -18,12 +19,22 @@ static int pico_send_and_wait(pico_device_t* dev,
     return -1;
   }
 
-  rc = serial_link_read_line(&dev->link, reply, (size_t)reply_sz, 500);
-  if(rc <= 0){
-    return -1;
+  /* 빈 줄/잡응답이 끼는 경우가 있어서
+     non-empty line이 나올 때까지 몇 번 읽는다. */
+  for(tries = 0; tries < 5; tries++){
+    rc = serial_link_read_line(&dev->link, reply, (size_t)reply_sz, 500);
+    if(rc <= 0){
+      return -1;
+    }
+
+    if(reply[0] == '\0'){
+      continue;
+    }
+
+    return 0;
   }
 
-  return 0;
+  return -1;
 }
 
 int pico_device_open(pico_device_t* dev, const char* path, int baudrate){
